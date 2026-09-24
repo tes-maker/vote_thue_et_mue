@@ -18,17 +18,7 @@ const ON_CLICK = {
   choice: d => { findVote(d.vote).choix[d.id] = d.val; commit(); },
   setAll: d => { const v = findVote(d.vote); voters().forEach(e => { v.choix[e.id] = d.val; }); commit(); },
 
-  delElu: d )]++);
-  r.votants = r.pour + r.contre + r.abst;
-  if (r.pour + r.contre === 0) { r.ok = null; r.res = "res_none"; }
-  else if (r.pour !== r.contre) {
-    r.ok = r.pour > r.contre;
-    r.res = !r.ok ? "res_rejected" : r.contre || r.abst ? "res_adopted" : "res_unanimous";
-  } else {
-    // Égalité : la voix du président de séance est prépondérante
-    const c = vs.some(e => e.id === S.seance.president) ? choice(v, S.seance.president) : null;
-    r.ok = c === "pour";
-    r.res = c === "pour" ? "res_adopted=> {
+  delElu: d => {
     if (!confirm(t("confirmDelMember", { nom: byId(d.id).nom }))) return;
     S.elus = S.elus.filter(e => e.id !== d.id);
     delete S.presence[d.id];
