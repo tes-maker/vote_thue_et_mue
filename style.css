@@ -38,23 +38,27 @@ main { flex: 1; padding-top: 8px; padding-bottom: 64px; }
 
 /* ---------- En-tête ---------- */
 .header { background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 18, .16); }
-.header-body { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
+.header-body { display: flex; align-items: center; justify-content: space-between; gap: 24px 40px; flex-wrap: wrap; padding-top: 16px; padding-bottom: 16px; }
 .brand { display: flex; align-items: center; gap: 24px; }
-.logo-rf { height: 80px; width: auto; }
-.logo { height: 52px; width: auto; }
+.service { margin-left: 8px; }
+.logo-rf { height: 72px; width: auto; }
+.logo { height: 48px; width: auto; }
+.logo-eu { height: 40px; width: auto; }
 .service-title { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.4; }
 .service-tagline { margin: 0; font-size: 14px; color: var(--texte-mention); }
-.tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.tools { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 
 .nav { border-top: 1px solid var(--bordure); }
-.nav .wrap { display: flex; flex-wrap: wrap; }
-.nav button {
+.nav .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 24px; }
+.tabs { display: flex; flex-wrap: wrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+.tabs button {
   background: none; border: 0; font: inherit; font-size: 14px; color: var(--texte);
   padding: 16px; cursor: pointer; border-bottom: 2px solid transparent;
 }
-.nav button:first-child { padding-left: 0; }
-.nav button:hover { background: var(--fond-alt); }
-.nav button.on { color: var(--bleu-france); border-bottom-color: var(--bleu-france); font-weight: 500; }
+.tabs button:first-child { padding-left: 0; }
+.tabs button:hover { background: var(--fond-alt); }
+.tabs button.on { color: var(--bleu-france); border-bottom-color: var(--bleu-france); font-weight: 500; }
 
 /* ---------- Titres et textes ---------- */
 h2 { font-size: 22px; font-weight: 700; line-height: 1.4; margin: 32px 0 16px; }
@@ -98,6 +102,7 @@ button.b:hover { background: var(--bleu-clair); }
 button.primary { background: var(--bleu-france); color: #fff; box-shadow: none; }
 button.primary:hover { background: var(--bleu-france-hover); }
 button.primary:active { background: var(--bleu-france-active); }
+button.b.tertiary { box-shadow: none; }
 button.b.lg { min-height: 40px; padding: 8px 16px; font-size: 16px; }
 
 button.link {
@@ -167,8 +172,11 @@ body.locked .login { display: flex; flex: 1; align-items: center; justify-conten
 .login-error { color: var(--erreur); font-size: 14px; margin: 0; min-height: 21px; }
 
 @media (max-width: 640px) {
-  .logo-rf { height: 64px; }
-  .logo { height: 40px; }
-  .brand { gap: 16px; }
+  .logo-rf { height: 54px; }
+  .logo { height: 36px; }
+  .logo-eu { height: 30px; }
+  .brand { gap: 12px 16px; flex-wrap: wrap; }
+  .header-body { gap: 16px; }
+  .service { flex-basis: 100%; margin-left: 0; }
   .service-title { font-size: 18px; }
 }

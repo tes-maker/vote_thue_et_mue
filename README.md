@@ -13,6 +13,8 @@ Petit site pour enregistrer les présences, les procurations et les résultats d
 | `config.js`            | L'empreinte de la clé de connexion     |
 | `logo_thue_et_mue.svg` | Logo de la commune                     |
 | `rf_logo.svg`          | Logo de la République française        |
+| `logo_eu.png`          | Logo de l'Union européenne             |
+| `logo_thue_et_mue.png` | Icône de l'onglet du navigateur        |
 | `image.png`            | Capture d'écran utilisée dans ce README |
 | `js/i18n.js`           | Les textes en français et en anglais   |
 | `js/data.js`           | La liste d'origine des élus            |

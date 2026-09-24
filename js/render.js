@@ -9,7 +9,7 @@ const attrs = o => Object.entries(o).map(([k, v]) => `data-${k}="${esc(v)}"`).jo
 const option = (value, label, selected) => `<option value="${esc(value)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
 
 function render() {
-  document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.val === current));
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.val === current));
   for (const id of ["presence", "votes", "elus"]) document.getElementById(id).classList.toggle("hidden", id !== current);
   document.getElementById("subtitle").textContent = t("subtitle", { titre: S.seance.titre || t("defaultSession"), date: fmtDate(S.seance.date) });
   ({ presence: renderPresence, votes: renderVotes, elus: renderElus })[current]();
