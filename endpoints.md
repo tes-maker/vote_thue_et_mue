@@ -1,17 +1,26 @@
 # API HTTP
 
-L'API est servie par le même serveur que l'interface, sous le préfixe `/api`. Les réponses sont en JSON, sauf la déconnexion qui renvoie `204 No Content`. Les routes sont destinées au client web du projet ; il n'y a pas d'API key ni de jeton bearer.
+L'API est servie par le même serveur que l'interface, sous le préfixe `/api`. Les réponses sont en JSON, sauf la déconnexion qui renvoie `204 No Content`. Les routes `/api/v1/...` sont les routes versionnées destinées aux intégrations ; les routes historiques restent disponibles pour le site actuel. Tous les clients d'une instance partagent le même registre et les mêmes données.
 
 ## Authentification et protections
 
 - La connexion crée une session serveur stockée dans PostgreSQL et renvoie un cookie de session `HttpOnly`, `SameSite=Strict`. En production, le cookie est également `Secure`.
-- Après connexion, les requêtes mutantes doivent fournir le jeton CSRF reçu dans la réponse de connexion ou de `/api/auth/me`, dans l'en-tête `X-CSRF-Token`.
+- Avec une session, les requêtes mutantes doivent fournir le jeton CSRF reçu dans la réponse de connexion ou de `/api/auth/me`, dans l'en-tête `X-CSRF-Token`.
+- Les intégrations serveur-à-serveur peuvent utiliser `Authorization: Bearer <jeton>` si `API_BEARER_TOKEN` est défini sur le serveur. Configurez un jeton aléatoire d'au moins 32 caractères, par exemple avec `openssl rand -hex 32`. Ce jeton donne le même accès en lecture et écriture que le compte administrateur ; ne l'intégrez jamais dans le code JavaScript d'un site public. Les requêtes bearer n'ont pas besoin de session ni de jeton CSRF.
 - Les routes qui modifient l'état demandent également la révision actuelle dans l'en-tête `If-Match`. La révision retournée par l'API doit être réutilisée telle quelle, sous forme de chaîne.
 - Le client web envoie les cookies en same-origin. Une session expire après huit heures d'inactivité glissante.
+- L'API est destinée à une intégration côté serveur et n'active pas CORS pour les navigateurs tiers.
+
+Exemple de lecture depuis le serveur d'un site tiers :
+
+```sh
+curl -H "Authorization: Bearer $VOTE_API_TOKEN" \
+  https://votes.exemple.fr/api/v1/state
+```
 
 ## Routes
 
-### `GET /api/health`
+### `GET /api/health` et `GET /api/v1/health`
 
 Vérifie la connexion à PostgreSQL. Cette route ne demande pas de session.
 
@@ -74,9 +83,9 @@ Réponse : `204 No Content`.
 
 Erreurs possibles : `401 unauthorized`, `403 csrf_invalid`.
 
-### `GET /api/state`
+### `GET /api/state` et `GET /api/v1/state`
 
-Récupère l'état actif, les archives et la révision. Requiert une session valide.
+Récupère l'état actif, les archives et la révision. Requiert une session valide ou le jeton bearer.
 
 Réponse `200` :
 
@@ -86,7 +95,8 @@ Réponse `200` :
     "elus": [],
     "seance": {},
     "presence": {},
-    "votes": []
+    "votes": [],
+    "votesConfidentiels": []
   },
   "history": [],
   "revision": 12
@@ -95,9 +105,9 @@ Réponse `200` :
 
 `active` vaut `null` avant la première initialisation. `history` contient des objets `{ "id", "archivedAt", "snapshot" }`.
 
-### `PUT /api/state`
+### `PUT /api/state` et `PUT /api/v1/state`
 
-Remplace l'état actif complet. Requiert une session, `X-CSRF-Token` et `If-Match`.
+Remplace l'état actif complet. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer.
 
 Exemple d'en-têtes :
 
@@ -124,12 +134,28 @@ Corps :
     "presence": {
       "elu1": { "present": true, "mandataire": null }
     },
-    "votes": []
+    "votes": [],
+    "votesConfidentiels": [
+      {
+        "id": "secret1",
+        "numero": "1",
+        "objet": "Choix d'une option",
+        "limite": 12,
+        "options": [
+          { "id": "option1", "nom": "Option A", "voix": 7 },
+          { "id": "option2", "nom": "Option B", "voix": 2 }
+        ],
+        "abstentions": 1,
+        "npp": 0
+      }
+    ]
   }
 }
 ```
 
 Les membres historiques sans champ `actif` sont acceptés et traités comme étant en exercice. Un vote contient `id`, `numero`, `objet`, `choix`, `electeurs` et `president` ; chaque électeur est une copie du membre au moment du vote, avec `present` et `mandataire`. Les choix possibles sont `pour`, `contre`, `abst` et `npp`. Les limites et règles de cohérence détaillées sont validées par le schéma du serveur.
+
+`votesConfidentiels` est facultatif à l'écriture (il vaut alors `[]` pour les données antérieures à cette fonctionnalité). Chaque vote confidentiel contient un plafond `limite` fixé au nombre d'élus en exercice lors de sa création, des choix nommés dans `options`, ainsi que les compteurs `abstentions` et `npp` (« ne prend pas part au vote »). Chaque suffrage est ajouté à une option, à l'abstention ou à la non-participation. Seuls les nombres agrégés sont stockés : aucune identité ni aucun choix individuel n'est associé à un bulletin. La somme des voix des options, des abstentions et des NPP ne peut dépasser `limite`. Le format antérieur `structures` est encore accepté en entrée et renvoyé sous le nom canonique `options`.
 
 Réponse `200` :
 
@@ -139,9 +165,9 @@ Réponse `200` :
 
 Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque.
 
-### `POST /api/archive`
+### `POST /api/archive` et `POST /api/v1/archive`
 
-Archive l'état actif courant. Requiert une session, `X-CSRF-Token` et `If-Match`. Le corps est ignoré ; le serveur archive la version stockée.
+Archive l'état actif courant. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer. Le corps est ignoré ; le serveur archive la version stockée.
 
 Réponse `200` :
 
@@ -158,9 +184,9 @@ Réponse `200` :
 
 Une archive ayant le même identifiant de séance est remplacée. Erreurs possibles : `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict`, `428 revision_required`.
 
-### `PUT /api/state/import`
+### `PUT /api/state/import` et `PUT /api/v1/state/import`
 
-Importe un état actif et une liste d'archives. Cette route est principalement utilisée lors de la migration des anciennes données locales. Requiert une session, `X-CSRF-Token` et `If-Match`.
+Importe un état actif et une liste d'archives. Cette route est principalement utilisée lors de la migration des anciennes données locales. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer.
 
 Corps :
 

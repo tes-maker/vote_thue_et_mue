@@ -2,13 +2,21 @@
 
 Application web pour préparer les séances du conseil municipal, saisir les présences, procurations et votes, consulter l'historique et exporter les résultats.
 
-![Aperçu de l'onglet « Séance & présences »](image.png)
+## Aperçu des onglets
+
+### Séance & présences
+
+![Gestion de la séance et des présences](images/presence.png)
+
+### Liste des élus
+
+![Gestion de la liste des élus](images/list.png)
 
 ## Fonctionnement
 
 - L'interface est servie par le serveur Node.js ; elle ne doit pas être ouverte directement avec `index.html` ni via `python -m http.server`.
 - L'API enregistre automatiquement la séance en cours et les archives dans PostgreSQL. Plusieurs postes connectés au même serveur partagent les mêmes données.
-- La liste des routes HTTP, des formats d'échange et des protections est décrite dans [endpoints.md](./endpoints.md).
+- La liste des routes HTTP versionnées, des formats d'échange et des protections est décrite dans [endpoints.md](./endpoints.md). Une intégration serveur-à-serveur peut utiliser un jeton bearer configuré dans `API_BEARER_TOKEN`; le jeton ne doit jamais être exposé au navigateur.
 - La connexion utilise un compte serveur. Le mot de passe n'est jamais envoyé au navigateur autrement que pour la requête HTTPS de connexion ; les sessions sont conservées côté serveur.
 - Le bouton **Archiver cette séance** crée une copie consultable dans l'onglet **Historique**. Le serveur archive également la séance avant le démarrage d'une nouvelle séance.
 - Les boutons **Exporter les résultats (CSV)** et **Exporter en JSON** téléchargent des copies destinées à l'exploitation ou à l'échange. Ils ne servent pas à sauvegarder le serveur.
@@ -61,10 +69,12 @@ HOST=127.0.0.1
 PORT=3000
 DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE_POSTGRES@127.0.0.1:5432/vote_app
 SESSION_SECRET=COLLER_ICI_UN_SECRET_GENERE_AVEC_OPENSSL
+# Facultatif pour les intégrations serveur-à-serveur : openssl rand -hex 32
+API_BEARER_TOKEN=COLLER_ICI_UN_JETON_ALEATOIRE
 TRUST_PROXY=0
 ```
 
-Enregistrez le fichier dans `nano` avec **Ctrl+O**, puis **Entrée** ; quittez avec **Ctrl+X**. Le fichier `.env` est ignoré par Git : ne le partagez pas et n'y inscrivez pas des secrets déjà divulgués.
+Supprimez la ligne `API_BEARER_TOKEN` si aucune intégration externe n'est nécessaire. Si vous la gardez, générez un jeton différent du secret de session avec `openssl rand -hex 32`. Enregistrez le fichier dans `nano` avec **Ctrl+O**, puis **Entrée** ; quittez avec **Ctrl+X**. Le fichier `.env` est ignoré par Git : ne le partagez pas et n'y inscrivez pas des secrets déjà divulgués.
 
 Installez les dépendances, créez les tables et le compte administrateur :
 
@@ -141,10 +151,12 @@ HOST=127.0.0.1
 PORT=3000
 DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE_POSTGRES@127.0.0.1:5432/vote_app
 SESSION_SECRET=COLLER_ICI_UN_SECRET_GENERE_AVEC_OPENSSL
+# Facultatif : openssl rand -hex 32 ; ne jamais exposer dans le navigateur
+API_BEARER_TOKEN=COLLER_ICI_UN_JETON_ALEATOIRE
 TRUST_PROXY=1
 ```
 
-Utilisez le mot de passe hexadécimal choisi précédemment dans `DATABASE_URL` (ou encodez les caractères spéciaux selon le format d'URL). Protégez ce fichier :
+Supprimez `API_BEARER_TOKEN` si vous n'avez pas d'intégration serveur-à-serveur. Sinon, générez un jeton distinct avec `openssl rand -hex 32`. Utilisez le mot de passe hexadécimal choisi précédemment dans `DATABASE_URL` (ou encodez les caractères spéciaux selon le format d'URL). Protégez ce fichier :
 
 ```bash
 sudo chown root:vote-cm /etc/vote-cm/app.env
@@ -277,12 +289,14 @@ Après vérification, modifiez `DATABASE_URL` dans `/etc/vote-cm/app.env` pour p
 ## Utilisation
 
 1. Connectez-vous avec le compte créé par l'administrateur du serveur.
+   Chaque onglet est accessible avec sa propre adresse : `/presence`, `/votes`, `/confidential`, `/elus` et `/history`. Vous pouvez ouvrir un onglet directement ou partager son URL.
 2. Dans **Liste des élus**, utilisez **Modifier** puis **Valider** pour corriger un nom ou une fonction. Le statut **En exercice / Démissionnaire** permet de retirer un membre des présences et des nouveaux votes sans supprimer ses votes déjà enregistrés.
 3. Dans **Séance & présences**, renseignez l'intitulé, la date, le président, puis les présences et procurations. Un élu présent peut porter plusieurs procurations.
 4. Dans **Votes**, créez chaque délibération puis saisissez les votes. Les votants sont enregistrés au moment où la délibération est créée ; ils sont « Pour » par défaut.
-5. Utilisez **Exporter les résultats (CSV)** pour obtenir un tableau plat, une ligne par vote individuel, avec des colonnes stables et séparées par des points-virgules. Le fichier est encodé en UTF-8 avec BOM pour faciliter son ouverture dans Excel.
-6. Utilisez **Exporter en JSON** pour obtenir les données détaillées de la séance en cours.
-7. Cliquez sur **Archiver cette séance** pour la conserver dans l'historique du serveur. L'archivage est confirmé à l'écran.
+5. Dans **Votes confidentiels**, créez un scrutin, nommez autant d'options que nécessaire, puis ajoutez chaque suffrage à une option, à **Abstention** ou à **Ne prend pas part au vote**. Les compteurs sont anonymes et leur somme est plafonnée au nombre d'élus en exercice lors de la création du scrutin.
+6. Utilisez **Exporter les résultats (CSV)** pour obtenir un tableau plat : une ligne par suffrage nominatif et des lignes agrégées anonymes pour les votes confidentiels. Le fichier est encodé en UTF-8 avec BOM pour faciliter son ouverture dans Excel.
+7. Utilisez **Exporter en JSON** pour obtenir les données détaillées de la séance en cours.
+8. Cliquez sur **Archiver cette séance**, désormais placé en haut de l'onglet séance, pour la conserver dans l'historique du serveur. Pour corriger les titres d'une séance archivée, reprenez-la depuis **Historique**, modifiez les votes dans leurs onglets respectifs, puis archivez à nouveau la séance.
 
 Le résultat est calculé automatiquement. En cas d'égalité, la voix du président de séance est prépondérante. Les votes déjà enregistrés conservent le nom et le choix de l'élu même si celui-ci est ensuite retiré de la liste.
 
@@ -290,6 +304,6 @@ Le résultat est calculé automatiquement. En cas d'égalité, la voix du prési
 
 - Le site doit être utilisé en HTTPS. La connexion utilise un cookie de session `HttpOnly`, `Secure` en production et `SameSite=Strict`, avec expiration après inactivité.
 - Les mots de passe sont stockés sous forme de hash bcrypt ; les tentatives de connexion sont limitées.
-- L'API valide les données, exige un jeton CSRF pour les écritures et refuse une sauvegarde si une autre connexion a modifié la séance entre-temps. Dans ce cas, rechargez la page pour récupérer la dernière version.
+- L'API valide les données et refuse une sauvegarde si une autre connexion a modifié la séance entre-temps. Les intégrations bearer sont serveur-à-serveur, donnent un accès complet au registre partagé et doivent protéger le jeton comme un secret administrateur.
 - Les comptes sont créés depuis le serveur avec `npm run admin:create -- adresse@exemple.fr`. Il n'existe pas encore d'écran de gestion des comptes.
 - L'application est conçue pour une seule commune et un seul registre partagé. Les sauvegardes PostgreSQL automatiques doivent être testées périodiquement en effectuant une restauration de contrôle.

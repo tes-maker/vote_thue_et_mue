@@ -4,17 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Votes du conseil municipal</title>
-<link rel="icon" type="image/png" href="logo_thue_et_mue.png">
-<link rel="stylesheet" href="style.css">
+<link rel="icon" type="image/png" href="/logo_thue_et_mue.png">
+<link rel="stylesheet" href="/style.css">
 </head>
 <body class="locked">
 <div id="login" class="login">
   <form class="login-box" data-submit="login">
     <div class="row spread">
       <div class="brand">
-        <img src="logo_eu.png" alt="Union européenne" class="logo-eu">
-        <img src="rf_logo.svg" alt="République française" class="logo-rf">
-        <img src="logo_thue_et_mue.svg" alt="Thue et Mue" class="logo">
+        <img src="/rf_logo.svg" data-light-src="/rf_logo.svg" data-dark-src="/rf_logo_dark.svg" alt="République française" class="logo-rf">
+        <img src="/logo_thue_et_mue.svg" data-light-src="/logo_thue_et_mue.svg" data-dark-src="/logo_thue_et_mue_dark.svg" alt="Thue et Mue" class="logo">
       </div>
       <div class="lang">
         <button type="button" data-act="lang" data-val="fr" lang="fr" title="Français">FR</button>
@@ -34,15 +33,15 @@
 <header class="header">
   <div class="wrap header-body">
     <div class="brand">
-      <img src="logo_eu.png" alt="Union européenne" class="logo-eu">
-      <img src="rf_logo.svg" alt="République française" class="logo-rf">
-      <img src="logo_thue_et_mue.svg" alt="Thue et Mue" class="logo">
+      <img src="/rf_logo.svg" data-light-src="/rf_logo.svg" data-dark-src="/rf_logo_dark.svg" alt="République française" class="logo-rf">
+      <img src="/logo_thue_et_mue.svg" data-light-src="/logo_thue_et_mue.svg" data-dark-src="/logo_thue_et_mue_dark.svg" alt="Thue et Mue" class="logo">
       <div class="service">
         <p class="service-title" data-i18n="appTitle">Votes du conseil municipal</p>
         <p class="service-tagline" id="subtitle"></p>
       </div>
     </div>
     <div class="tools">
+      <button class="b tertiary" type="button" data-act="themeToggle" id="theme-toggle"></button>
       <button class="b tertiary" data-act="logout" data-i18n="logout">Se déconnecter</button>
       <div class="lang">
         <button type="button" data-act="lang" data-val="fr" lang="fr" title="Français">FR</button>
@@ -55,6 +54,7 @@
       <div class="tabs">
         <button data-act="tab" data-val="presence" data-i18n="tabPresence">Séance &amp; présences</button>
         <button data-act="tab" data-val="votes" data-i18n="tabVotes">Votes</button>
+        <button data-act="tab" data-val="confidential" data-i18n="tabConfidential">Votes confidentiels</button>
         <button data-act="tab" data-val="elus" data-i18n="tabElus">Liste des élus</button>
         <button data-act="tab" data-val="history" data-i18n="tabHistory">Historique</button>
       </div>
@@ -70,6 +70,7 @@
 <main class="wrap">
   <section id="presence"></section>
   <section id="votes" class="hidden"></section>
+  <section id="confidential" class="hidden"></section>
   <section id="elus" class="hidden"></section>
   <section id="history" class="hidden"></section>
 </main>
@@ -81,16 +82,16 @@
 </footer>
 
 <!-- L'ordre des scripts compte : chaque fichier utilise ceux chargés avant lui -->
-<script src="js/i18n.js"></script>
-<script src="js/data.js"></script>
-<script src="js/utils.js"></script>
-<script src="js/api.js"></script>
-<script src="js/state.js"></script>
-<script src="js/votes.js"></script>
-<script src="js/render.js"></script>
-<script src="js/actions.js"></script>
-<script src="js/export.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/main.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/data.js"></script>
+<script src="/js/utils.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/state.js"></script>
+<script src="/js/votes.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/actions.js"></script>
+<script src="/js/export.js"></script>
+<script src="/js/auth.js"></script>
+<script src="/js/main.js"></script>
 </body>
 </html>

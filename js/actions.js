@@ -12,8 +12,9 @@ function showNotification(message, kind = "success") {
 }
 
 const ON_CLICK = {
-  tab: d => { current = d.val; render(); },
+  tab: d => { navigateToTab(d.val); render(); },
   lang: d => setLang(d.val),
+  themeToggle: () => toggleTheme(),
   logout: () => logout(),
   exportCSV: () => exportCSV(),
   exportJSON: () => exportJSON(),
@@ -22,6 +23,14 @@ const ON_CLICK = {
       showNotification(t("archiveSuccess"));
       render();
     }
+  },
+  editVoteTitle: d => {
+    editingVoteTitle = { voteId: d.vote, type: d.type };
+    render();
+  },
+  cancelVoteTitle: () => {
+    editingVoteTitle = null;
+    render();
   },
   restoreArchive: d => restoreArchive(d.id),
 
@@ -38,6 +47,38 @@ const ON_CLICK = {
   delVote: d => { if (confirm(t("confirmDelItem"))) { S.votes = S.votes.filter(v => v.id !== d.vote); commit(); } },
   choice: d => { findVote(d.vote).choix[d.id] = d.val; commit(); },
   setAll: d => { const v = findVote(d.vote); voteVoters(v).forEach(e => { v.choix[e.id] = d.val; }); commit(); },
+  delConfidentialVote: d => {
+    if (confirm(t("confirmDelItem"))) {
+      S.votesConfidentiels = S.votesConfidentiels.filter(v => v.id !== d.vote);
+      commit();
+    }
+  },
+  delConfidentialOption: d => {
+    const vote = findConfidentialVote(d.vote);
+    if (!vote) return;
+    vote.options = vote.options.filter(option => option.id !== d.id);
+    commit();
+  },
+  confidentialCount: d => {
+    const vote = findConfidentialVote(d.vote);
+    if (!vote) return;
+    const delta = Number(d.delta);
+    if (!Number.isInteger(delta) || ![-1, 1].includes(delta)) return;
+    const currentCount = d.target === "abstentions" || d.target === "npp"
+      ? vote[d.target]
+      : vote.options.find(option => option.id === d.id)?.voix;
+    if (!Number.isInteger(currentCount) || currentCount + delta < 0) return;
+    const total = vote.abstentions + vote.npp + vote.options.reduce((sum, option) => sum + option.voix, 0);
+    if (delta > 0 && total >= vote.limite) return;
+    if (d.target === "abstentions" || d.target === "npp") vote[d.target] += delta;
+    else {
+      const option = vote.options.find(item => item.id === d.id);
+      if (!option) return;
+      option.voix += delta;
+    }
+    commit({ render: false });
+    refreshConfidentialVote(vote);
+  },
 
   delElu: d => {
     if (!confirm(t("confirmDelMember", { nom: byId(d.id).nom }))) return;
@@ -73,6 +114,19 @@ const ON_CHANGE = {
 
 const ON_SUBMIT = {
   login: f => login(f),
+  saveVoteTitle: f => {
+    const voteId = f.dataset.vote;
+    const type = f.dataset.type;
+    const objet = f.elements.objet.value.trim();
+    if (!voteId || !objet) return;
+    const vote = type === "confidential"
+      ? findConfidentialVote(voteId)
+      : findVote(voteId);
+    if (!vote) return;
+    vote.objet = objet;
+    editingVoteTitle = null;
+    commit();
+  },
   addVote: f => {
     const objet = f.elements.objet.value.trim();
     if (!objet) return;
@@ -86,6 +140,34 @@ const ON_SUBMIT = {
     };
     S.votes.push(v);
     openVote = v.id;
+    commit();
+  },
+  addConfidentialVote: f => {
+    const objet = f.elements.objet.value.trim();
+    if (!objet) return;
+    const numero = f.elements.numero.value.trim();
+    const highestNumber = Math.max(
+      0,
+      ...S.votes.map(v => parseInt(v.numero, 10) || 0),
+      ...S.votesConfidentiels.map(v => parseInt(v.numero, 10) || 0),
+    );
+    const vote = {
+      id: uid(),
+      numero: numero || String(highestNumber + 1),
+      objet,
+      limite: S.elus.filter(member => member.actif).length,
+      options: [],
+      abstentions: 0,
+      npp: 0,
+    };
+    S.votesConfidentiels.push(vote);
+    commit();
+  },
+  addConfidentialOption: f => {
+    const vote = findConfidentialVote(f.dataset.vote);
+    const nom = f.elements.nom.value.trim();
+    if (!vote || !nom) return;
+    vote.options.push({ id: uid(), nom, voix: 0 });
     commit();
   },
   addElu: f => {
@@ -106,11 +188,13 @@ const ON_SUBMIT = {
 };
 
 const findVote = id => S.votes.find(v => v.id === id);
+const findConfidentialVote = id => S.votesConfidentiels.find(v => v.id === id);
 
 // Un seul écouteur par type d'événement pour toute la page
 document.addEventListener("click", ev => {
   const el = ev.target.closest("[data-act]");
   if (!el) return;
+  ev.preventDefault();
   if (saveError && !["tab", "lang", "logout"].includes(el.dataset.act)) {
     showNotification(t("stateConflict"), "error");
     return;

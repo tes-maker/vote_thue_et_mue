@@ -21,6 +21,9 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL doit être défini.
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   throw new Error("SESSION_SECRET doit comporter au moins 32 caractères.");
 }
+if (process.env.API_BEARER_TOKEN && Buffer.byteLength(process.env.API_BEARER_TOKEN, "utf8") < 32) {
+  throw new Error("API_BEARER_TOKEN doit comporter au moins 32 caractères.");
+}
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT invalide.");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -49,6 +52,37 @@ const voteSchema = z.object({
   electeurs: z.array(voterSchema).max(200),
   president: idSchema.nullable(),
 });
+const confidentialOptionSchema = z.object({
+  id: idSchema,
+  nom: z.string().trim().min(1).max(255),
+  voix: z.number().int().min(0).max(200),
+});
+const confidentialVoteSchema = z.object({
+  id: idSchema,
+  numero: z.string().max(50),
+  objet: z.string().max(5000),
+  limite: z.number().int().min(0).max(200),
+  options: z.array(confidentialOptionSchema).max(200).optional(),
+  structures: z.array(confidentialOptionSchema).max(200).optional(),
+  abstentions: z.number().int().min(0).max(200),
+  npp: z.number().int().min(0).max(200),
+}).superRefine((vote, context) => {
+  if (vote.options && vote.structures) {
+    context.addIssue({ code: "custom", message: "Le vote confidentiel ne peut définir options et structures simultanément." });
+  }
+  const options = vote.options ?? vote.structures ?? [];
+  const optionIds = new Set(options.map(option => option.id));
+  if (optionIds.size !== options.length) {
+    context.addIssue({ code: "custom", message: "Une option est présente plusieurs fois dans le vote confidentiel." });
+  }
+  const total = options.reduce((sum, option) => sum + option.voix, vote.abstentions + vote.npp);
+  if (total > vote.limite) {
+    context.addIssue({ code: "custom", message: "Le nombre de bulletins dépasse le nombre d'élus autorisés." });
+  }
+}).transform(({ structures, ...vote }) => ({
+  ...vote,
+  options: vote.options ?? structures ?? [],
+}));
 const sessionSchema = z.object({
   elus: z.array(memberSchema).max(200),
   seance: z.object({
@@ -59,6 +93,7 @@ const sessionSchema = z.object({
   }),
   presence: z.record(idSchema, attendanceSchema),
   votes: z.array(voteSchema).max(2000),
+  votesConfidentiels: z.array(confidentialVoteSchema).max(2000).default([]),
 }).superRefine((state, context) => {
   const memberIds = new Set(state.elus.map(member => member.id));
   const membersById = new Map(state.elus.map(member => [member.id, member]));
@@ -106,6 +141,13 @@ const sessionSchema = z.object({
       context.addIssue({ code: "custom", message: "Un choix de vote ne correspond à aucun électeur." });
     }
   }
+  const confidentialVoteIds = new Set();
+  for (const vote of state.votesConfidentiels) {
+    if (confidentialVoteIds.has(vote.id)) {
+      context.addIssue({ code: "custom", message: "La liste contient des votes confidentiels en double." });
+    }
+    confidentialVoteIds.add(vote.id);
+  }
 });
 const archiveSchema = z.object({
   id: idSchema,
@@ -131,11 +173,32 @@ function validate(schema, value, res) {
 }
 
 function requireAuth(req, res, next) {
-  if (!req.session.userId) return sendError(res, 401, "unauthorized");
-  next();
+  if (isValidApiToken(req.get("Authorization"), process.env.API_BEARER_TOKEN)) {
+    req.apiAuthenticated = true;
+    req.authUserId = null;
+    return next();
+  }
+  return requireSessionAuth(req, res, next);
+}
+
+function requireSessionAuth(req, res, next) {
+  if (req.session?.userId) {
+    req.authUserId = req.session.userId;
+    return next();
+  }
+  return sendError(res, 401, "unauthorized");
+}
+
+function isValidApiToken(authorization, expectedToken) {
+  const match = /^Bearer ([^\s]+)$/i.exec(authorization ?? "");
+  if (!expectedToken || !match) return false;
+  const provided = Buffer.from(match[1]);
+  const expected = Buffer.from(expectedToken);
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
 }
 
 function requireCsrf(req, res, next) {
+  if (req.apiAuthenticated) return next();
   const token = req.get("X-CSRF-Token");
   const provided = Buffer.from(token ?? "");
   const expected = Buffer.from(req.session.csrfToken ?? "");
@@ -249,7 +312,7 @@ function createApp() {
     legacyHeaders: false,
   });
 
-  app.get("/api/health", async (_req, res, next) => {
+  app.get(["/api/health", "/api/v1/health"], async (_req, res, next) => {
     try {
       await pool.query("SELECT 1");
       res.json({ status: "ok" });
@@ -297,7 +360,7 @@ function createApp() {
     res.json({ user: { email: req.session.userEmail }, csrfToken: req.session.csrfToken });
   });
 
-  app.post("/api/auth/logout", requireAuth, requireCsrf, (req, res, next) => {
+  app.post("/api/auth/logout", requireSessionAuth, requireCsrf, (req, res, next) => {
     req.session.destroy(error => {
       if (error) return next(error);
       res.clearCookie(isProduction ? "__Host-vote-cm" : "vote-cm.sid", {
@@ -310,7 +373,7 @@ function createApp() {
     });
   });
 
-  app.get("/api/state", requireAuth, async (req, res, next) => {
+  app.get(["/api/state", "/api/v1/state"], requireAuth, async (req, res, next) => {
     try {
       const result = await pool.query(
         `SELECT
@@ -325,9 +388,13 @@ function createApp() {
           ), '[]'::jsonb) AS history`,
       );
       const row = result.rows[0];
+      const active = row.active === null ? null : sessionSchema.parse(row.active);
       res.json({
-        active: row.active,
-        history: row.history,
+        active,
+        history: row.history.map(archive => ({
+          ...archive,
+          snapshot: sessionSchema.parse(archive.snapshot),
+        })),
         revision: Number(row.revision),
       });
     } catch (error) {
@@ -335,7 +402,7 @@ function createApp() {
     }
   });
 
-  app.put("/api/state", requireAuth, requireCsrf, async (req, res, next) => {
+  app.put(["/api/state", "/api/v1/state"], requireAuth, requireCsrf, async (req, res, next) => {
     const revision = expectedRevision(req, res);
     if (revision === null) return;
     const active = validate(sessionSchema, req.body?.active, res);
@@ -344,7 +411,7 @@ function createApp() {
       const result = await transaction(async client => {
         const actual = await checkRevision(client, revision);
         if (actual === null) return null;
-        return storeState(client, active, req.session.userId, actual);
+        return storeState(client, active, req.authUserId, actual);
       });
       if (result === null) return sendError(res, 409, "state_conflict");
       res.json({ revision: result });
@@ -353,7 +420,7 @@ function createApp() {
     }
   });
 
-  app.post("/api/archive", requireAuth, requireCsrf, async (req, res, next) => {
+  app.post(["/api/archive", "/api/v1/archive"], requireAuth, requireCsrf, async (req, res, next) => {
     const revision = expectedRevision(req, res);
     if (revision === null) return;
     try {
@@ -374,16 +441,16 @@ function createApp() {
            ON CONFLICT (session_id) DO UPDATE
            SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
                archived_by = EXCLUDED.archived_by`,
-          [archive.id, archive.archivedAt, JSON.stringify(snapshot), req.session.userId],
+          [archive.id, archive.archivedAt, JSON.stringify(snapshot), req.authUserId],
         );
         const nextRevision = revision + 1;
         await client.query(
           "UPDATE app_state SET revision = $1, updated_at = NOW(), updated_by = $2 WHERE id = 1",
-          [nextRevision, req.session.userId],
+          [nextRevision, req.authUserId],
         );
         await client.query(
           "INSERT INTO audit_log (user_id, action) VALUES ($1, 'session.archived')",
-          [req.session.userId],
+          [req.authUserId],
         );
         return { archive, revision: nextRevision };
       });
@@ -395,7 +462,7 @@ function createApp() {
     }
   });
 
-  app.put("/api/state/import", requireAuth, requireCsrf, async (req, res, next) => {
+  app.put(["/api/state/import", "/api/v1/state/import"], requireAuth, requireCsrf, async (req, res, next) => {
     const revision = expectedRevision(req, res);
     if (revision === null) return;
     const active = validate(sessionSchema, req.body?.active, res);
@@ -406,7 +473,7 @@ function createApp() {
       const result = await transaction(async client => {
         const actual = await checkRevision(client, revision);
         if (actual === null) return null;
-        const nextRevision = await storeState(client, active, req.session.userId, actual, "state.imported");
+        const nextRevision = await storeState(client, active, req.authUserId, actual, "state.imported");
         if (nextRevision === null) return null;
         for (const archive of history) {
           await client.query(
@@ -415,7 +482,7 @@ function createApp() {
              ON CONFLICT (session_id) DO UPDATE
              SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
                  archived_by = EXCLUDED.archived_by`,
-            [archive.id, archive.archivedAt, JSON.stringify(archive.snapshot), req.session.userId],
+            [archive.id, archive.archivedAt, JSON.stringify(archive.snapshot), req.authUserId],
           );
         }
         return nextRevision;
@@ -427,10 +494,16 @@ function createApp() {
     }
   });
 
-  app.get("/", (req, res) => res.sendFile(path.join(ROOT, "index.html")));
+  const tabRoutes = new Set(["presence", "votes", "confidential", "elus", "history"]);
+  app.get("/", (_req, res) => res.sendFile(path.join(ROOT, "index.html")));
+  app.get("/:tab", (req, res, next) => {
+    if (!tabRoutes.has(req.params.tab)) return next();
+    res.sendFile(path.join(ROOT, "index.html"));
+  });
   const publicFiles = new Set([
     "style.css", "logo_eu.png", "logo_thue_et_mue.png",
-    "logo_thue_et_mue.svg", "rf_logo.svg", "image.png",
+    "logo_thue_et_mue.svg", "logo_thue_et_mue_dark.svg",
+    "rf_logo.svg", "rf_logo_dark.svg", "image.png",
   ]);
   app.get("/:file", (req, res, next) => {
     if (!publicFiles.has(req.params.file)) return next();
@@ -468,4 +541,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createApp, sessionSchema, archiveSchema };
+module.exports = {
+  createApp,
+  sessionSchema,
+  archiveSchema,
+  confidentialVoteSchema,
+  isValidApiToken,
+  requireAuth,
+  requireCsrf,
+};

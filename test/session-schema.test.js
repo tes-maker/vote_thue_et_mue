@@ -38,6 +38,69 @@ test("accepts multiple proxies held by one present councillor", () => {
   assert.equal(sessionSchema.safeParse(session()).success, true);
 });
 
+test("adds an empty confidential-vote list for older session data", () => {
+  const result = sessionSchema.safeParse(session());
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.votesConfidentiels, []);
+});
+
+test("accepts anonymous option tallies within the elected-member limit", () => {
+  const value = session();
+  value.votesConfidentiels = [{
+    id: "secret1",
+    numero: "2",
+    objet: "Choix d'une option",
+    limite: 3,
+    options: [
+      { id: "option1", nom: "Option A", voix: 1 },
+      { id: "option2", nom: "Option B", voix: 1 },
+    ],
+    abstentions: 1,
+    npp: 0,
+  }];
+  const result = sessionSchema.safeParse(value);
+  assert.equal(result.success, true);
+  assert.equal(result.data.votesConfidentiels[0].options.length, 2);
+});
+
+test("accepts legacy structure tallies and converts them to options", () => {
+  const value = session();
+  value.votesConfidentiels = [{
+    id: "secret1",
+    numero: "2",
+    objet: "Choix",
+    limite: 2,
+    structures: [{ id: "option1", nom: "Option A", voix: 1 }],
+    abstentions: 0,
+    npp: 0,
+  }];
+  const result = sessionSchema.safeParse(value);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.votesConfidentiels[0].options, [{ id: "option1", nom: "Option A", voix: 1 }]);
+  assert.equal(Object.hasOwn(result.data.votesConfidentiels[0], "structures"), false);
+});
+
+test("rejects confidential tallies above the ballot limit and duplicate option ids", () => {
+  const value = session();
+  value.votesConfidentiels = [{
+    id: "secret1",
+    numero: "2",
+    objet: "Choix d'une option",
+    limite: 2,
+    options: [
+      { id: "option1", nom: "Option A", voix: 1 },
+      { id: "option2", nom: "Option B", voix: 1 },
+    ],
+    abstentions: 1,
+    npp: 0,
+  }];
+  assert.equal(sessionSchema.safeParse(value).success, false);
+
+  value.votesConfidentiels[0].abstentions = 0;
+  value.votesConfidentiels[0].options[1].id = "option1";
+  assert.equal(sessionSchema.safeParse(value).success, false);
+});
+
 test("treats members without a status as serving for backwards compatibility", () => {
   const result = sessionSchema.safeParse(session());
   assert.equal(result.success, true);

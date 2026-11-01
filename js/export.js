@@ -16,6 +16,7 @@ async function exportCSV() {
     "resolution_id", "resolution_number", "resolution_subject", "result",
     "for_count", "against_count", "abstention_count", "not_voting_count",
     "member_id", "member_name", "member_role", "attendance", "proxy_holder", "choice",
+    "ballot_type", "option", "count", "eligible_limit",
   ];
   const out = [
     line(headers),
@@ -31,8 +32,20 @@ async function exportCSV() {
         member.present ? "present" : member.mandataire ? "represented" : "absent",
         member.mandataire ? holderNames.get(member.mandataire) ?? "" : "",
         choice(v, member.id),
+        "nominal", "", "", "",
       ]));
     }),
+    ...S.votesConfidentiels.flatMap(v => [
+      ...v.options.map(option => [option.nom, option.voix]),
+      [t("confidentialAbstentions"), v.abstentions],
+      [t("confidentialNpp"), v.npp],
+    ].map(([option, count]) => line([
+      S.seance.id, S.seance.titre, S.seance.date, "",
+      v.id, v.numero, v.objet, t("confidentialLabel"),
+      "", "", "", "",
+      "", "", "", "", "", "",
+      "confidential", option, count, v.limite,
+    ]))),
   ];
   download(`${t("csvFile")}_${S.seance.date || today()}.csv`, "\uFEFF" + out.join("\r\n"), "text/csv;charset=utf-8");
 }
@@ -71,6 +84,6 @@ function restoreArchive(id) {
   if (!entry || !confirm(t("historyRestoreConfirm"))) return;
   S = normalize(entry.snapshot);
   openVote = null;
-  current = "votes";
+  navigateToTab("votes");
   return commit();
 }

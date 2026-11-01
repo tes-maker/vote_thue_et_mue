@@ -1,12 +1,29 @@
 /* ---------- état de la séance (enregistré sur le serveur) ---------- */
 const ID_RE = /^[a-z0-9]+$/;
 const validId = id => typeof id === "string" && ID_RE.test(id);
+function uniqueId(id, used) {
+  if (validId(id) && !used.has(id)) {
+    used.add(id);
+    return id;
+  }
+  let replacement;
+  do replacement = uid();
+  while (!validId(replacement) || used.has(replacement));
+  used.add(replacement);
+  return replacement;
+}
 let revision = 0;
 let saveQueue = Promise.resolve(true);
 let saveError = null;
 
 function fresh(elus = DEFAULT_ELUS.map(([nom, fonction]) => ({ id: uid(), nom, fonction, actif: true }))) {
-  return { elus, seance: { id: uid(), titre: "Conseil municipal", date: today(), president: elus[0]?.id ?? null }, presence: {}, votes: [] };
+  return {
+    elus,
+    seance: { id: uid(), titre: "Conseil municipal", date: today(), president: elus[0]?.id ?? null },
+    presence: {},
+    votes: [],
+    votesConfidentiels: [],
+  };
 }
 
 // Vérifie et complète des données venant du navigateur ou d'un fichier ; null si invalides.
@@ -27,7 +44,27 @@ function normalize(s) {
       mandataire: e.actif && validId(p?.mandataire) ? p.mandataire : null,
     };
   });
-  const votes = Array.isArray(s.votes) ? s.votes.filter(v => validId(v?.id)) : [];
+  const rawVotes = Array.isArray(s.votes) ? s.votes : [];
+  if (rawVotes.some(vote => !vote || typeof vote !== "object" || Array.isArray(vote))) return null;
+  const usedVoteIds = new Set();
+  const votes = rawVotes.map(vote => ({ ...vote, id: uniqueId(vote.id, usedVoteIds) }));
+  const votesConfidentiels = Array.isArray(s.votesConfidentiels)
+    ? s.votesConfidentiels.filter(v => v && typeof v === "object" && !Array.isArray(v)).map(v => ({
+        id: validId(v.id) ? v.id : uid(),
+        numero: String(v.numero ?? ""),
+        objet: String(v.objet ?? ""),
+        limite: Number.isInteger(v.limite) ? v.limite : elus.filter(member => member.actif).length,
+        options: Array.isArray(v.options ?? v.structures)
+          ? (v.options ?? v.structures).filter(option => validId(option?.id)).map(option => ({
+              id: option.id,
+              nom: String(option.nom ?? ""),
+              voix: Number.isInteger(option.voix) ? option.voix : 0,
+            }))
+          : [],
+        abstentions: Number.isInteger(v.abstentions) ? v.abstentions : 0,
+        npp: Number.isInteger(v.npp) ? v.npp : 0,
+      }))
+    : [];
   return {
     elus,
     seance: {
@@ -37,6 +74,7 @@ function normalize(s) {
       president: seance.president ?? s.elus[0]?.id ?? null,
     },
     presence,
+    votesConfidentiels,
     votes: votes.map(v => ({
       id: v.id,
       numero: String(v.numero ?? ""),
@@ -182,9 +220,9 @@ function sanitize() {
   });
   if (!byId(S.seance.president)?.actif) S.seance.president = S.elus.find(e => e.actif)?.id ?? null;
 }
-function commit() {
+function commit({ render: shouldRender = true } = {}) {
   sanitize();
-  render();
+  if (shouldRender) render();
   const snapshot = JSON.parse(JSON.stringify(S));
   setSaveStatus("serverSaving");
   const pending = saveQueue.then(async () => {
@@ -216,6 +254,7 @@ let pendingSaves = 0;
 function setSaveStatus(key) {
   const status = document.getElementById("save-status");
   if (!status) return;
-  status.textContent = t(key);
+  status.textContent = key === "saveFailure" ? t(key) : "";
+  status.hidden = key !== "saveFailure";
   status.classList.toggle("error", key === "saveFailure");
 }

@@ -14,10 +14,12 @@ const I18N = {
     export: "Exporter les résultats (CSV)",
     exportJSON: "Exporter en JSON",
     serverSaving: "Enregistrement sur le serveur…",
-    serverSaved: "Enregistré sur le serveur",
+    enableDarkMode: "Activer le mode sombre",
+    enableLightMode: "Activer le mode clair",
     logout: "Se déconnecter",
     tabPresence: "Séance & présences",
     tabVotes: "Votes",
+    tabConfidential: "Votes confidentiels",
     tabElus: "Liste des élus",
     tabHistory: "Historique",
     footer: "Commune de Thue et Mue · Registre des votes du conseil municipal",
@@ -66,6 +68,23 @@ const I18N = {
     enterVotes: "Saisir les votes",
     close: "Fermer",
     delete: "Supprimer",
+    newConfidentialVote: "Nouveau vote confidentiel",
+    confidentialVotePlaceholder: "Objet du vote confidentiel",
+    confidentialInstructions: "Pour chaque suffrage, choisissez une option nommée, « Abstention » ou « Ne prend pas part au vote ». Seuls les compteurs anonymes sont conservés, sans lien avec les élus.",
+    confidentialVotesTitle: "Votes confidentiels ({n})",
+    noConfidentialVotes: "Aucun vote confidentiel pour le moment.",
+    confidentialLabel: "Confidentiel",
+    confidentialLimit: "{total} bulletin(s) comptabilisé(s) sur {limite} élu(s) actif(s) maximum.",
+    confidentialTotal: "Bulletins comptabilisés",
+    confidentialAbstentions: "Abstention",
+    confidentialNpp: "Ne prend pas part au vote",
+    confidentialCount: "Suffrages",
+    optionPlaceholder: "Nom de l’option",
+    optionName: "Option",
+    addOption: "Ajouter l’option",
+    noOptions: "Aucune option ajoutée.",
+    confidentialIncrement: "Ajouter un suffrage pour {nom}",
+    confidentialDecrement: "Retirer un suffrage pour {nom}",
 
     choice_pour: "Pour",
     choice_contre: "Contre",
@@ -113,6 +132,9 @@ const I18N = {
     historyArchivedAt: "Archivée le {date}",
     historyRestore: "Reprendre cette séance",
     historyRestoreConfirm: "Remplacer la séance actuelle par cette séance archivée ? Pensez à sauvegarder les données actuelles.",
+    historyVoteTitle: "Titre du vote",
+    editTitle: "Modifier le titre",
+    saveTitle: "Enregistrer le titre",
     historyNoVotes: "Aucune délibération enregistrée pour cette séance.",
     voteDetails: "Voir les votes nominatifs",
     archiveSuccess: "Séance archivée avec succès.",
@@ -144,10 +166,12 @@ const I18N = {
     export: "Export results (CSV)",
     exportJSON: "Export JSON",
     serverSaving: "Saving to server…",
-    serverSaved: "Saved on server",
+    enableDarkMode: "Enable dark mode",
+    enableLightMode: "Enable light mode",
     logout: "Sign out",
     tabPresence: "Session & attendance",
     tabVotes: "Votes",
+    tabConfidential: "Secret ballots",
     tabElus: "Councillors",
     tabHistory: "History",
     footer: "Municipality of Thue et Mue · Municipal council voting record",
@@ -196,6 +220,23 @@ const I18N = {
     enterVotes: "Enter votes",
     close: "Close",
     delete: "Delete",
+    newConfidentialVote: "New secret ballot",
+    confidentialVotePlaceholder: "Subject of the secret ballot",
+    confidentialInstructions: "For each ballot, choose a named option, “Abstention”, or “Not voting”. Only anonymous totals are stored, with no link to councillors.",
+    confidentialVotesTitle: "Secret ballots ({n})",
+    noConfidentialVotes: "No secret ballots yet.",
+    confidentialLabel: "Secret",
+    confidentialLimit: "{total} ballot(s) counted, up to {limite} serving councillor(s).",
+    confidentialTotal: "Ballots counted",
+    confidentialAbstentions: "Abstention",
+    confidentialNpp: "Not voting",
+    confidentialCount: "Votes",
+    optionPlaceholder: "Name of the option",
+    optionName: "Option",
+    addOption: "Add option",
+    noOptions: "No options added.",
+    confidentialIncrement: "Add one vote for {nom}",
+    confidentialDecrement: "Remove one vote for {nom}",
 
     choice_pour: "For",
     choice_contre: "Against",
@@ -243,6 +284,9 @@ const I18N = {
     historyArchivedAt: "Archived on {date}",
     historyRestore: "Restore this session",
     historyRestoreConfirm: "Replace the current session with this archived session? Remember to back up current data first.",
+    historyVoteTitle: "Vote title",
+    editTitle: "Edit title",
+    saveTitle: "Save title",
     historyNoVotes: "No resolutions were recorded for this session.",
     voteDetails: "Show individual votes",
     archiveSuccess: "Session archived successfully.",
@@ -261,8 +305,12 @@ const I18N = {
 };
 
 const LANG_KEY = "vote-cm-lang";
+const THEME_KEY = "vote-cm-theme";
 let lang = "fr";
+let theme = "light";
 try { if (I18N[localStorage.getItem(LANG_KEY)]) lang = localStorage.getItem(LANG_KEY); } catch (e) {}
+try { if (localStorage.getItem(THEME_KEY) === "dark") theme = "dark"; } catch (e) {}
+document.documentElement.dataset.theme = theme;
 
 // Renvoie le texte traduit ; {nom} est remplacé par params.nom
 function t(key, params) {
@@ -277,6 +325,21 @@ function applyStatic() {
   document.title = t("appTitle");
   document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll(".lang button").forEach(b => b.classList.toggle("on", b.dataset.val === lang));
+  const themeToggle = document.getElementById("theme-toggle");
+  if (themeToggle) {
+    themeToggle.textContent = t(theme === "dark" ? "enableLightMode" : "enableDarkMode");
+    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+  }
+  document.querySelectorAll("img[data-dark-src]").forEach(img => {
+    img.src = theme === "dark" ? img.dataset.darkSrc : img.dataset.lightSrc;
+  });
+}
+
+function toggleTheme() {
+  theme = theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+  applyStatic();
 }
 
 function setLang(l) {

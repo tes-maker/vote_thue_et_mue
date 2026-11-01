@@ -23,6 +23,7 @@ function createExportContext() {
     seance: { id: "s1", titre: "Conseil municipal", date: "2026-11-01", president: "m1" },
     presence: {},
     votes: [vote],
+    votesConfidentiels: [],
   };
   const downloads = [];
   const context = {
@@ -30,7 +31,13 @@ function createExportContext() {
     ARCHIVES: [],
     saveQueue: Promise.resolve(true),
     saveError: null,
-    t: key => ({ csvFile: "votes_conseil", jsonFile: "seance" })[key] ?? key,
+    t: key => ({
+      csvFile: "votes_conseil",
+      jsonFile: "seance",
+      confidentialAbstentions: "Abstention",
+      confidentialNpp: "NPP",
+      confidentialLabel: "Confidentiel",
+    })[key] ?? key,
     today: () => "2026-11-01",
     byId: id => members.find(member => member.id === id),
     voteVoters: item => item.electeurs,
@@ -60,8 +67,29 @@ test("exports CSV as a flat, quoted row per voter and prevents spreadsheet formu
   assert.equal(rows.length, 4);
   assert.match(rows[0], /^"session_id";"session_title";"session_date"/);
   assert.match(rows[1], /"m1";"Présent";"Maire";"present"/);
-  assert.match(rows[2], /"m2";"'=Formule";"Conseiller";"represented";"Présent";"contre"$/);
-  assert.match(rows[3], /"m3";"Absent; troisième";"Conseiller";"represented";"Présent";"abst"$/);
+  assert.match(rows[2], /"m2";"'=Formule";"Conseiller";"represented";"Présent";"contre";"nominal";"";"";""$/);
+  assert.match(rows[3], /"m3";"Absent; troisième";"Conseiller";"represented";"Présent";"abst";"nominal";"";"";""$/);
+});
+
+test("exports confidential ballots only as anonymized aggregate counts", async () => {
+  const { context, downloads } = createExportContext();
+  context.S.votesConfidentiels.push({
+    id: "secret1",
+    numero: "2",
+    objet: "Désignation",
+    limite: 3,
+    options: [{ id: "option1", nom: "Option A", voix: 1 }],
+    abstentions: 1,
+    npp: 0,
+  });
+  await context.exportCSV();
+
+  const rows = downloads[0][1].replace(/^\uFEFF/, "").split("\r\n");
+  assert.equal(rows.length, 7);
+  assert.match(rows[4], /"confidential";"Option A";"1";"3"$/);
+  assert.match(rows[5], /"confidential";"Abstention";"1";"3"$/);
+  assert.match(rows[6], /"confidential";"NPP";"0";"3"$/);
+  assert.doesNotMatch(rows.slice(4).join("\n"), /"m1"|"m2"|"Présent"|"Formule"/);
 });
 
 test("exports the active session as plain JSON, not a local backup bundle", async () => {
