@@ -122,6 +122,18 @@ tbody tr:nth-child(even) { background: var(--fond-alt); }
 td .f { color: var(--texte-mention); font-size: 12px; }
 td input { width: 100%; font-size: 14px; padding: 6px 10px; }
 td select { font-size: 14px; padding: 6px 32px 6px 10px; }
+.member-actions { white-space: nowrap; }
+.member-edit label { display: flex; flex: 1 1 200px; flex-direction: column; gap: 4px; }
+button.member-action {
+  min-height: 32px; padding: 4px 10px; border: 1px solid var(--bordure-forte); border-radius: 0;
+  background: #fff; color: var(--texte); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  white-space: nowrap;
+}
+button.member-action:hover { background: var(--fond-alt); }
+button.member-edit-action { border-color: var(--bleu-france); color: var(--bleu-france); }
+button.member-delete-action { border-color: var(--erreur); color: var(--erreur); }
+button.member-status.active { border-color: var(--succes); background: #e3fdeb; color: var(--succes); }
+button.member-status.resigned { border-color: var(--bordure-forte); background: var(--fond-contraste); color: var(--texte-mention); }
 
 /* ---------- Boutons segmentés (présence / vote) ---------- */
 .seg { display: inline-flex; box-shadow: inset 0 0 0 1px var(--bleu-france); }

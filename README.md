@@ -8,6 +8,7 @@ Application web pour préparer les séances du conseil municipal, saisir les pr�
 
 - L'interface est servie par le serveur Node.js ; elle ne doit pas être ouverte directement avec `index.html` ni via `python -m http.server`.
 - L'API enregistre automatiquement la séance en cours et les archives dans PostgreSQL. Plusieurs postes connectés au même serveur partagent les mêmes données.
+- La liste des routes HTTP, des formats d'échange et des protections est décrite dans [endpoints.md](./endpoints.md).
 - La connexion utilise un compte serveur. Le mot de passe n'est jamais envoyé au navigateur autrement que pour la requête HTTPS de connexion ; les sessions sont conservées côté serveur.
 - Le bouton **Archiver cette séance** crée une copie consultable dans l'onglet **Historique**. Le serveur archive également la séance avant le démarrage d'une nouvelle séance.
 - Les boutons **Exporter les résultats (CSV)** et **Exporter en JSON** téléchargent des copies destinées à l'exploitation ou à l'échange. Ils ne servent pas à sauvegarder le serveur.
@@ -276,7 +277,7 @@ Après vérification, modifiez `DATABASE_URL` dans `/etc/vote-cm/app.env` pour p
 ## Utilisation
 
 1. Connectez-vous avec le compte créé par l'administrateur du serveur.
-2. Vérifiez la **Liste des élus**.
+2. Dans **Liste des élus**, utilisez **Modifier** puis **Valider** pour corriger un nom ou une fonction. Le statut **En exercice / Démissionnaire** permet de retirer un membre des présences et des nouveaux votes sans supprimer ses votes déjà enregistrés.
 3. Dans **Séance & présences**, renseignez l'intitulé, la date, le président, puis les présences et procurations. Un élu présent peut porter plusieurs procurations.
 4. Dans **Votes**, créez chaque délibération puis saisissez les votes. Les votants sont enregistrés au moment où la délibération est créée ; ils sont « Pour » par défaut.
 5. Utilisez **Exporter les résultats (CSV)** pour obtenir un tableau plat, une ligne par vote individuel, avec des colonnes stables et séparées par des points-virgules. Le fichier est encodé en UTF-8 avec BOM pour faciliter son ouverture dans Excel.

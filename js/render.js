@@ -3,6 +3,7 @@
    les formulaires data-submit : voir actions.js. */
 let current = "presence";
 let openVote = null;
+let editingMember = null;
 
 // Attributs data-* échappés : attrs({ act: "x", id: 1 }) -> data-act="x" data-id="1"
 const attrs = o => Object.entries(o).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
@@ -30,9 +31,10 @@ function renderStats() {
 
 /* ---------- onglet Séance & présences ---------- */
 function renderPresence() {
-  const presents = S.elus.filter(e => isPresent(e.id));
+  const activeMembers = S.elus.filter(e => e.actif);
+  const presents = activeMembers.filter(e => isPresent(e.id));
   const held = proxies();
-  const rows = S.elus.map(e => {
+  const rows = activeMembers.map(e => {
     const p = pres(e.id);
     const represented = held.get(e.id) ?? [];
     const proc = p.present
@@ -55,7 +57,7 @@ function renderPresence() {
     <div class="grid">
       <label>${t("sessionTitle")}<input value="${esc(S.seance.titre)}" data-change="titre"></label>
       <label>${t("date")}<input type="date" value="${esc(S.seance.date)}" data-change="date"></label>
-      <label>${t("president")}<select data-change="president">${S.elus.map(e => option(e.id, e.nom, S.seance.president === e.id)).join("")}</select></label>
+      <label>${t("president")}<select data-change="president">${activeMembers.map(e => option(e.id, e.nom, S.seance.president === e.id)).join("")}</select></label>
     </div>
     ${renderStats()}
     <div class="row spread section">
@@ -160,11 +162,32 @@ function renderVotes() {
 
 /* ---------- onglet Liste des élus ---------- */
 function renderElus() {
-  const rows = S.elus.map(e => `<tr>
-    <td class="w30"><input value="${esc(e.nom)}" ${attrs({ change: "elu", id: e.id, field: "nom" })}></td>
-    <td><input value="${esc(e.fonction)}" ${attrs({ change: "elu", id: e.id, field: "fonction" })}></td>
-    <td class="shrink"><button class="link" ${attrs({ act: "delElu", id: e.id })}>${t("delete")}</button></td>
-  </tr>`).join("");
+  const rows = S.elus.map(e => {
+    if (editingMember === e.id) {
+      return `<tr><td colspan="4">
+        <form class="row member-edit" data-submit="saveElu" ${attrs({ id: e.id })}>
+          <label>${t("colName")}<input name="nom" value="${esc(e.nom)}" required></label>
+          <label class="grow">${t("colRole")}<input name="fonction" value="${esc(e.fonction)}"></label>
+          <button class="b primary" type="submit">${t("validate")}</button>
+          <button class="b" type="button" ${attrs({ act: "cancelEditElu" })}>${t("cancel")}</button>
+        </form>
+      </td></tr>`;
+    }
+    const status = e.actif ? "memberActive" : "memberResigned";
+    const action = e.actif ? "memberMarkResigned" : "memberReactivate";
+    return `<tr>
+      <td class="w30">${esc(e.nom)}</td>
+      <td>${esc(e.fonction)}</td>
+      <td><button class="member-action member-status ${e.actif ? "active" : "resigned"}"
+        ${attrs({ act: "toggleEluStatus", id: e.id })}
+        aria-pressed="${e.actif}" aria-label="${esc(t("memberStatusControl", { status: t(status), action: t(action) }))}"
+        title="${t(action)}">${t(status)}</button></td>
+      <td class="member-actions">
+        <button class="member-action member-edit-action" ${attrs({ act: "editElu", id: e.id })}>${t("edit")}</button>
+        <button class="member-action member-delete-action" ${attrs({ act: "delElu", id: e.id })}>${t("delete")}</button>
+      </td>
+    </tr>`;
+  }).join("");
   document.getElementById("elus").innerHTML = `
     <h2>${t("addMember")}</h2>
     <form class="row" data-submit="addElu">
@@ -172,9 +195,10 @@ function renderElus() {
       <input name="fonction" placeholder="${t("rolePlaceholder")}" class="grow">
       <button class="b primary lg">${t("add")}</button>
     </form>
-    <h2>${t("members", { n: S.elus.length })}</h2>
+    <h2>${t("members", { n: S.elus.filter(member => member.actif).length })}</h2>
+    <p class="note">${t("memberStatusNote")}</p>
     <div class="scroll"><table>
-      <thead><tr><th>${t("colName")}</th><th>${t("colRole")}</th><th></th></tr></thead>
+      <thead><tr><th>${t("colName")}</th><th>${t("colRole")}</th><th>${t("memberStatus")}</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div class="section"><button class="b" data-act="resetElus">${t("resetList")}</button></div>`;

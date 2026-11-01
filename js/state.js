@@ -5,7 +5,7 @@ let revision = 0;
 let saveQueue = Promise.resolve(true);
 let saveError = null;
 
-function fresh(elus = DEFAULT_ELUS.map(([nom, fonction]) => ({ id: uid(), nom, fonction }))) {
+function fresh(elus = DEFAULT_ELUS.map(([nom, fonction]) => ({ id: uid(), nom, fonction, actif: true }))) {
   return { elus, seance: { id: uid(), titre: "Conseil municipal", date: today(), president: elus[0]?.id ?? null }, presence: {}, votes: [] };
 }
 
@@ -13,11 +13,19 @@ function fresh(elus = DEFAULT_ELUS.map(([nom, fonction]) => ({ id: uid(), nom, f
 function normalize(s) {
   if (!s || !Array.isArray(s.elus) || !s.elus.every(e => validId(e?.id))) return null;
   const seance = typeof s.seance === "object" && s.seance ? s.seance : {};
-  const elus = s.elus.map(e => ({ id: e.id, nom: String(e.nom ?? ""), fonction: String(e.fonction ?? "") }));
+  const elus = s.elus.map(e => ({
+    id: e.id,
+    nom: String(e.nom ?? ""),
+    fonction: String(e.fonction ?? ""),
+    actif: typeof e.actif === "boolean" ? e.actif : true,
+  }));
   const presence = {};
   elus.forEach(e => {
     const p = s.presence?.[e.id];
-    presence[e.id] = { present: p?.present !== false, mandataire: validId(p?.mandataire) ? p.mandataire : null };
+    presence[e.id] = {
+      present: e.actif && p?.present !== false,
+      mandataire: e.actif && validId(p?.mandataire) ? p.mandataire : null,
+    };
   });
   const votes = Array.isArray(s.votes) ? s.votes.filter(v => validId(v?.id)) : [];
   return {
@@ -39,6 +47,7 @@ function normalize(s) {
             id: e.id,
             nom: String(e.nom ?? ""),
             fonction: String(e.fonction ?? ""),
+            actif: typeof e.actif === "boolean" ? e.actif : true,
             present: e.present !== false,
             mandataire: validId(e.mandataire) ? e.mandataire : null,
           }))
@@ -129,7 +138,7 @@ let ARCHIVES = [];
 const byId = id => S.elus.find(e => e.id === id);
 const pres = id => S.presence[id];
 const isPresent = id => pres(id).present;
-const isVoter = e => isPresent(e.id) || !!pres(e.id).mandataire;
+const isVoter = e => e.actif && (isPresent(e.id) || !!pres(e.id).mandataire);
 const voters = () => S.elus.filter(isVoter);
 const voteVoters = v => v.electeurs;
 const voteSession = v => ({ president: v.president });
@@ -150,9 +159,10 @@ function proxies() {
 }
 
 function counts() {
-  const n = S.elus.length;
-  const p = S.elus.filter(e => isPresent(e.id)).length;
-  const r = S.elus.filter(e => !isPresent(e.id) && !!pres(e.id).mandataire).length;
+  const active = S.elus.filter(e => e.actif);
+  const n = active.length;
+  const p = active.filter(e => isPresent(e.id)).length;
+  const r = active.filter(e => !isPresent(e.id) && !!pres(e.id).mandataire).length;
   const quorum = Math.floor(n / 2) + 1;
   return { n, p, r, a: n - p - r, quorum, quorumOk: p >= quorum };
 }
@@ -161,14 +171,16 @@ function counts() {
 function sanitize() {
   S.elus.forEach(e => {
     const p = S.presence[e.id];
-    S.presence[e.id] = { present: p?.present !== false, mandataire: p?.mandataire ?? null };
+    S.presence[e.id] = e.actif
+      ? { present: p?.present !== false, mandataire: p?.mandataire ?? null }
+      : { present: false, mandataire: null };
   });
   S.elus.forEach(e => {
     const p = pres(e.id);
     const h = p.mandataire;
-    if (p.present || !byId(h) || !isPresent(h)) p.mandataire = null;
+    if (p.present || !byId(h)?.actif || !isPresent(h)) p.mandataire = null;
   });
-  if (!byId(S.seance.president)) S.seance.president = S.elus[0]?.id ?? null;
+  if (!byId(S.seance.president)?.actif) S.seance.president = S.elus.find(e => e.actif)?.id ?? null;
 }
 function commit() {
   sanitize();

@@ -26,7 +26,7 @@ const ON_CLICK = {
   restoreArchive: d => restoreArchive(d.id),
 
   present: d => { pres(d.id).present = d.val === "1"; commit(); },
-  allPresent: d => { S.elus.forEach(e => { S.presence[e.id] = { present: d.val === "1", mandataire: null }; }); commit(); },
+  allPresent: d => { S.elus.filter(e => e.actif).forEach(e => { S.presence[e.id] = { present: d.val === "1", mandataire: null }; }); commit(); },
   newSeance: async () => {
     if (confirm(t("confirmNewSession")) && await archiveCurrentSession()) {
       S = fresh(S.elus);
@@ -45,8 +45,19 @@ const ON_CLICK = {
     delete S.presence[d.id];
     commit();
   },
+  editElu: d => { editingMember = d.id; render(); },
+  cancelEditElu: () => { editingMember = null; render(); },
+  toggleEluStatus: d => {
+    const member = byId(d.id);
+    if (!member) return;
+    if (member.actif && !confirm(t("confirmMemberResignation", { nom: member.nom }))) return;
+    member.actif = !member.actif;
+    if (member.actif) S.presence[member.id] = { present: false, mandataire: null };
+    commit();
+  },
   resetElus: async () => {
     if (confirm(t("confirmReset")) && await archiveCurrentSession()) {
+      editingMember = null;
       S = fresh();
       commit();
     }
@@ -58,7 +69,6 @@ const ON_CHANGE = {
   date: (d, val) => { S.seance.date = val; commit(); },
   president: (d, val) => { S.seance.president = val; commit(); },
   mandataire: (d, val) => { pres(d.id).mandataire = val || null; commit(); },
-  elu: (d, val) => { byId(d.id)[d.field] = val.trim(); commit(); },
 };
 
 const ON_SUBMIT = {
@@ -81,7 +91,16 @@ const ON_SUBMIT = {
   addElu: f => {
     const nom = f.elements.nom.value.trim();
     if (!nom) return;
-    S.elus.push({ id: uid(), nom, fonction: f.elements.fonction.value.trim() });
+    S.elus.push({ id: uid(), nom, fonction: f.elements.fonction.value.trim(), actif: true });
+    commit();
+  },
+  saveElu: f => {
+    const member = byId(f.dataset.id);
+    const nom = f.elements.nom.value.trim();
+    if (!member || !nom) return;
+    member.nom = nom;
+    member.fonction = f.elements.fonction.value.trim();
+    editingMember = null;
     commit();
   },
 };

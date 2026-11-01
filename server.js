@@ -31,6 +31,7 @@ const memberSchema = z.object({
   id: idSchema,
   nom: z.string().max(255),
   fonction: z.string().max(500),
+  actif: z.boolean().default(true),
 });
 const attendanceSchema = z.object({
   present: z.boolean(),
@@ -60,11 +61,12 @@ const sessionSchema = z.object({
   votes: z.array(voteSchema).max(2000),
 }).superRefine((state, context) => {
   const memberIds = new Set(state.elus.map(member => member.id));
+  const membersById = new Map(state.elus.map(member => [member.id, member]));
   if (memberIds.size !== state.elus.length) {
     context.addIssue({ code: "custom", message: "La liste contient des identifiants d'élus en double." });
   }
-  if (state.seance.president && !memberIds.has(state.seance.president)) {
-    context.addIssue({ code: "custom", message: "Le président doit appartenir à la liste des élus." });
+  if (state.seance.president && !membersById.get(state.seance.president)?.actif) {
+    context.addIssue({ code: "custom", message: "Le président doit être en exercice." });
   }
   if (Object.keys(state.presence).length !== memberIds.size
     || state.elus.some(member => !Object.hasOwn(state.presence, member.id))) {
@@ -72,8 +74,11 @@ const sessionSchema = z.object({
   }
   for (const member of state.elus) {
     const attendance = state.presence[member.id];
+    if (!member.actif && (attendance.present || attendance.mandataire)) {
+      context.addIssue({ code: "custom", message: "Un membre démissionnaire ne peut pas participer à la séance." });
+    }
     if (attendance.mandataire
-      && (attendance.present || !memberIds.has(attendance.mandataire)
+      && (!member.actif || attendance.present || !membersById.get(attendance.mandataire)?.actif
         || !state.presence[attendance.mandataire]?.present)) {
       context.addIssue({ code: "custom", message: "Une procuration doit être portée par un élu présent." });
     }

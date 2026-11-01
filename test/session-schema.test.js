@@ -38,6 +38,33 @@ test("accepts multiple proxies held by one present councillor", () => {
   assert.equal(sessionSchema.safeParse(session()).success, true);
 });
 
+test("treats members without a status as serving for backwards compatibility", () => {
+  const result = sessionSchema.safeParse(session());
+  assert.equal(result.success, true);
+  assert.equal(result.data.elus.every(member => member.actif), true);
+  assert.equal(result.data.votes[0].electeurs.every(member => member.actif), true);
+});
+
+test("keeps resigned members out of attendance while retaining recorded votes", () => {
+  const value = session();
+  value.elus[2].actif = false;
+  value.presence.m3 = { present: false, mandataire: null };
+  const result = sessionSchema.safeParse(value);
+  assert.equal(result.success, true);
+  assert.equal(result.data.votes[0].electeurs.some(member => member.id === "m3"), true);
+});
+
+test("rejects an inactive member in attendance or as session president", () => {
+  const value = session();
+  value.elus[0].actif = false;
+  assert.equal(sessionSchema.safeParse(value).success, false);
+
+  const inactivePresident = session();
+  inactivePresident.elus[0].actif = false;
+  inactivePresident.presence.m1 = { present: false, mandataire: null };
+  assert.equal(sessionSchema.safeParse(inactivePresident).success, false);
+});
+
 test("rejects a proxy assigned to an absent councillor", () => {
   const value = session();
   value.presence.m1.present = false;
