@@ -30,12 +30,13 @@ const DEFAULT_ELUS = [
   ["Caroline ROUSSEL", "Conseillère municipale (Bretteville-l'Orgueilleuse)"],
   ["François BOREANIZ", "Conseiller municipal (Cheux)"],
   ["Céline SALLIOT", "Conseillère municipale (Putot-en-Bessin)"],
-  ["Pascal VALLERAND", "Conseiller municipal (Cheux)"],
+  ["Hugo PUPIN", "Conseiller municipal (Sainte-Croix-Grand-Tonne)"],
   ["Flavie HERPIN", "Conseillère municipale (Bretteville-l'Orgueilleuse)"],
   ["Lucie ROUILLAY", "Conseillère municipale (Bretteville-l'Orgueilleuse)"],
 ];
 // Choix de vote possibles (libellés dans i18n.js)
 const CHOIX = ["pour", "contre", "abst", "npp"];
 
-// Clé de stockage des données dans le navigateur
+// Clés historiques utilisées uniquement pour migrer les anciennes données du navigateur
 const KEY = "vote-cm-v1";
+const HISTORY_KEY = "vote-cm-history-v1";

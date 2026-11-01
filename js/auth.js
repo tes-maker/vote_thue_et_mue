@@ -1,36 +1,57 @@
-/* ---------- connexion par clé (empreinte dans config.js) ---------- */
-const SESSION_KEY = "vote-cm-session";
-
-async function sha256(txt) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
-  return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, "0")).join("");
-}
+/* ---------- authentification par compte serveur ---------- */
+const IDLE_TIMEOUT = 15 * 60 * 1000;
+let idleTimer;
 
 function setLocked(locked) {
+  clearTimeout(idleTimer);
   document.body.classList.toggle("locked", locked);
-  if (locked) document.getElementById("cle").focus();
-  else { sanitize(); render(); }
+  if (locked) document.getElementById("email").focus();
+  else { sanitize(); render(); resetIdleTimeout(); }
+}
+
+function resetIdleTimeout() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(logout, IDLE_TIMEOUT);
 }
 
 async function login(form) {
   const err = document.getElementById("login-error");
-  if (!window.crypto?.subtle) { err.textContent = t("loginNoCrypto"); return; }
-  if (await sha256(form.elements.cle.value) === CLE_HASH) {
-    try { sessionStorage.setItem(SESSION_KEY, CLE_HASH); } catch (e) {}
+  try {
+    await API.login(form.elements.email.value.trim(), form.elements.password.value);
+    await loadServerState();
     form.reset();
     err.textContent = "";
     setLocked(false);
-  } else {
-    err.textContent = t("loginBad");
-    form.elements.cle.select();
+  } catch (error) {
+    err.textContent = error instanceof ApiError && error.status === 401
+      ? t("loginBad")
+      : error.message === t("loginDataError") ? error.message : t("loginServerUnavailable");
   }
 }
 
-function logout() {
-  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {}
-  setLocked(true);
+async function restoreLogin() {
+  if (!await API.currentUser()) return;
+  await loadServerState();
+  setLocked(false);
 }
 
-function isLoggedIn() {
-  try { return sessionStorage.getItem(SESSION_KEY) === CLE_HASH; } catch (e) { return false; }
+async function logout() {
+  const saved = await saveQueue;
+  let logoutFailed = false;
+  try {
+    await API.logout();
+  } catch {
+    logoutFailed = true;
+  } finally {
+    setLocked(true);
+  }
+  document.getElementById("login-error").textContent = !saved || saveError
+    ? t("saveFailure")
+    : logoutFailed ? t("logoutServerError") : "";
 }
+
+["pointerdown", "keydown", "input", "touchstart", "wheel", "scroll"].forEach(eventName => {
+  document.addEventListener(eventName, () => {
+    if (!document.body.classList.contains("locked")) resetIdleTimeout();
+  });
+});

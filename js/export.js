@@ -1,47 +1,76 @@
 /* ---------- export CSV (dans la langue affichée) ---------- */
-function exportCSV() {
-  const cell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+async function exportCSV() {
+  if (!await saveQueue || saveError) {
+    showNotification(t("saveFailure"), "error");
+    return;
+  }
+  const cell = value => {
+    let text = String(value ?? "");
+    if (/^[\s]*[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
   const line = arr => arr.map(cell).join(";");
   const pr = byId(S.seance.president);
-  const c = counts();
-  const vs = voters();
+  const headers = [
+    "session_id", "session_title", "session_date", "session_president",
+    "resolution_id", "resolution_number", "resolution_subject", "result",
+    "for_count", "against_count", "abstention_count", "not_voting_count",
+    "member_id", "member_name", "member_role", "attendance", "proxy_holder", "choice",
+  ];
   const out = [
-    line([t("session"), S.seance.titre]),
-    line([t("date"), fmtDate(S.seance.date)]),
-    line([t("president"), pr ? pr.nom : ""]),
-    line([t("csvMembers"), c.n]),
-    line([t("statPresent"), c.p]),
-    line([t("statRepresented"), c.r]),
-    line([t("statAbsent"), c.a]),
-    line(["Quorum", t(c.quorumOk ? "quorumOk" : "quorumKo")]),
-    "",
-    line([t("csvResults")]),
-    line([t("csvNo"), t("csvSubject"), t("statVoters"), t("choice_pour"), t("choice_contre"), t("tallyAbst"), t("tallyNpp"), t("csvResult")]),
-    ...S.votes.map(v => { const r = tally(v, vs); return line([v.numero, v.objet, r.votants, r.pour, r.contre, r.abst, r.npp, t(r.res)]); }),
-    "",
-    line([t("csvDetail")]),
-    line([t("colName"), t("colRole"), t("colAttendance"), t("csvProxyTo"), ...S.votes.map(v => t("csvItem", { n: v.numero }))]),
-    ...S.elus.map(e => {
-      const m = pres(e.id).mandataire;
-      return line([e.nom, e.fonction, statut(e), m && !isPresent(e.id) ? byId(m).nom : "",
-        ...S.votes.map(v => isVoter(e) ? t("choice_" + choice(v, e.id)) : "")]);
+    line(headers),
+    ...S.votes.flatMap(v => {
+      const voters = voteVoters(v);
+      const result = tally(v, voters, voteSession(v));
+      const holderNames = new Map(voters.map(member => [member.id, member.nom]));
+      return voters.map(member => line([
+        S.seance.id, S.seance.titre, S.seance.date, pr?.nom ?? "",
+        v.id, v.numero, v.objet, result.res,
+        result.pour, result.contre, result.abst, result.npp,
+        member.id, member.nom, member.fonction,
+        member.present ? "present" : member.mandataire ? "represented" : "absent",
+        member.mandataire ? holderNames.get(member.mandataire) ?? "" : "",
+        choice(v, member.id),
+      ]));
     }),
   ];
-  // BOM pour qu'Excel lise correctement les accents
-  download(`${t("csvFile")}_${S.seance.date || today()}.csv`, "﻿" + out.join("\r\n"), "text/csv;charset=utf-8");
+  download(`${t("csvFile")}_${S.seance.date || today()}.csv`, "\uFEFF" + out.join("\r\n"), "text/csv;charset=utf-8");
 }
 
-/* ---------- sauvegarde / ouverture d'une séance ---------- */
-function saveJSON() {
-  download(`${t("jsonFile")}_${S.seance.date || today()}.json`, JSON.stringify(S, null, 2), "application/json");
+async function exportJSON() {
+  if (!await saveQueue || saveError) {
+    showNotification(t("saveFailure"), "error");
+    return;
+  }
+  download(
+    `${t("jsonFile")}_${S.seance.date || today()}.json`,
+    JSON.stringify(S, null, 2),
+    "application/json;charset=utf-8",
+  );
 }
-function loadJSON(input) {
-  const f = input.files[0];
-  if (!f) return;
-  f.text().then(txt => {
-    let s = null;
-    try { s = normalize(JSON.parse(txt)); } catch (e) {}
-    if (s) { S = s; openVote = null; commit(); } else alert(t("invalidFile"));
-    input.value = "";
-  });
+
+let archiveInProgress = false;
+
+async function archiveCurrentSession() {
+  if (archiveInProgress) return false;
+  archiveInProgress = true;
+  try {
+    if (!await saveQueue || saveError) return false;
+    const result = await API.archive(revision);
+    revision = result.revision;
+    ARCHIVES = [...ARCHIVES.filter(item => item.id !== result.archive.id), result.archive];
+    setSaveStatus("serverSaved");
+    return true;
+  } finally {
+    archiveInProgress = false;
+  }
+}
+
+function restoreArchive(id) {
+  const entry = ARCHIVES.find(item => item.id === id);
+  if (!entry || !confirm(t("historyRestoreConfirm"))) return;
+  S = normalize(entry.snapshot);
+  openVote = null;
+  current = "votes";
+  return commit();
 }

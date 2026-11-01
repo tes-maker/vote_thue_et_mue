@@ -52,6 +52,8 @@ main { flex: 1; padding-top: 8px; padding-bottom: 64px; }
 .nav .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 24px; }
 .tabs { display: flex; flex-wrap: wrap; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+.save-status { align-self: center; margin-right: 8px; font-size: 13px; color: var(--texte-mention); }
+.save-status.error { color: var(--erreur); }
 .tabs button {
   background: none; border: 0; font: inherit; font-size: 14px; color: var(--texte);
   padding: 16px; cursor: pointer; border-bottom: 2px solid transparent;
@@ -170,6 +172,15 @@ body.locked .login { display: flex; flex: 1; align-items: center; justify-conten
 .login-box h1 { font-size: 22px; margin: 16px 0 8px; }
 .login-box button.lg { align-self: flex-start; }
 .login-error { color: var(--erreur); font-size: 14px; margin: 0; min-height: 21px; }
+
+.notification {
+  position: fixed; right: 24px; bottom: 24px; z-index: 1000; max-width: min(360px, calc(100vw - 32px));
+  padding: 12px 16px; border-radius: 8px; background: #fff; color: var(--texte);
+  border-left: 4px solid var(--succes); box-shadow: 0 6px 20px rgba(0, 0, 18, .16);
+  opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity .2s ease, transform .2s ease;
+}
+.notification.show { opacity: 1; transform: translateY(0); }
+.notification.error { border-left-color: var(--erreur); }
 
 @media (max-width: 640px) {
   .logo-rf { height: 54px; }

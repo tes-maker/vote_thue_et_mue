@@ -22,8 +22,10 @@
       </div>
     </div>
     <h1 data-i18n="appTitle">Votes du conseil municipal</h1>
-    <label for="cle" data-i18n="loginLabel">Clé de connexion</label>
-    <input type="password" id="cle" name="cle" autocomplete="current-password" required autofocus>
+    <label for="email" data-i18n="loginEmail">Adresse e-mail</label>
+    <input type="email" id="email" name="email" autocomplete="username" required autofocus>
+    <label for="password" data-i18n="loginPassword">Mot de passe</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
     <p class="login-error" id="login-error" role="alert"></p>
     <button class="b primary lg" data-i18n="loginBtn">Se connecter</button>
   </form>
@@ -54,12 +56,12 @@
         <button data-act="tab" data-val="presence" data-i18n="tabPresence">Séance &amp; présences</button>
         <button data-act="tab" data-val="votes" data-i18n="tabVotes">Votes</button>
         <button data-act="tab" data-val="elus" data-i18n="tabElus">Liste des élus</button>
+        <button data-act="tab" data-val="history" data-i18n="tabHistory">Historique</button>
       </div>
       <div class="actions">
-        <button class="b" data-act="openFile" data-i18n="open">Ouvrir</button>
-        <button class="b" data-act="saveJSON" data-i18n="save">Sauvegarder</button>
+        <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
         <button class="b primary" data-act="exportCSV" data-i18n="export">Exporter les résultats (CSV)</button>
-        <input type="file" id="file" accept=".json" class="hidden" data-change="file">
+        <button class="b" data-act="exportJSON" data-i18n="exportJSON">Exporter en JSON</button>
       </div>
     </div>
   </nav>
@@ -69,17 +71,20 @@
   <section id="presence"></section>
   <section id="votes" class="hidden"></section>
   <section id="elus" class="hidden"></section>
+  <section id="history" class="hidden"></section>
 </main>
+
+<div id="notification" class="notification" role="status" aria-live="polite"></div>
 
 <footer class="footer">
   <div class="wrap" data-i18n="footer">Commune de Thue et Mue · Registre des votes du conseil municipal</div>
 </footer>
 
 <!-- L'ordre des scripts compte : chaque fichier utilise ceux chargés avant lui -->
-<script src="config.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/data.js"></script>
 <script src="js/utils.js"></script>
+<script src="js/api.js"></script>
 <script src="js/state.js"></script>
 <script src="js/votes.js"></script>
 <script src="js/render.js"></script>

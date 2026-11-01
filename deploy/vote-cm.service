@@ -1,0 +1,22 @@
+[Unit]
+Description=Registre des votes du conseil municipal
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=vote-cm
+Group=vote-cm
+WorkingDirectory=/opt/vote_thue_et_mue
+EnvironmentFile=/etc/vote-cm/app.env
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

@@ -10,9 +10,9 @@ const option = (value, label, selected) => `<option value="${esc(value)}"${selec
 
 function render() {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.val === current));
-  for (const id of ["presence", "votes", "elus"]) document.getElementById(id).classList.toggle("hidden", id !== current);
+  for (const id of ["presence", "votes", "elus", "history"]) document.getElementById(id).classList.toggle("hidden", id !== current);
   document.getElementById("subtitle").textContent = t("subtitle", { titre: S.seance.titre || t("defaultSession"), date: fmtDate(S.seance.date) });
-  ({ presence: renderPresence, votes: renderVotes, elus: renderElus })[current]();
+  ({ presence: renderPresence, votes: renderVotes, elus: renderElus, history: renderHistory })[current]();
 }
 
 function renderStats() {
@@ -34,11 +34,11 @@ function renderPresence() {
   const held = proxies();
   const rows = S.elus.map(e => {
     const p = pres(e.id);
-    const m = held.get(e.id);
+    const represented = held.get(e.id) ?? [];
     const proc = p.present
-      ? (m ? `<span class="note">${t("proxyHolder")} <b>${esc(m.nom)}</b></span>` : "")
+      ? (represented.length ? `<span class="note">${t("proxyHolder")} <b>${represented.map(m => esc(m.nom)).join(", ")}</b></span>` : "")
       : `<select ${attrs({ change: "mandataire", id: e.id })}>${option("", t("noProxy"))}${
-          presents.filter(h => !held.has(h.id) || p.mandataire === h.id).map(h => option(h.id, h.nom, p.mandataire === h.id)).join("")
+          presents.filter(h => h.id !== e.id || p.mandataire === h.id).map(h => option(h.id, h.nom, p.mandataire === h.id)).join("")
         }</select>`;
     return `<tr>
       <td><div>${esc(e.nom)}</div><div class="f">${esc(e.fonction)}</div></td>
@@ -70,15 +70,51 @@ function renderPresence() {
       <thead><tr><th>${t("colMember")}</th><th>${t("colAttendance")}</th><th>${t("colProxy")}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="section"><button class="b" data-act="newSeance">${t("newSession")}</button></div>`;
+    <div class="section row">
+      <button class="b" data-act="archiveSession">${t("archiveSession")}</button>
+      <button class="b" data-act="newSeance">${t("newSession")}</button>
+    </div>`;
+}
+
+function renderHistory() {
+  const entries = [...ARCHIVES].sort((a, b) => b.snapshot.seance.date.localeCompare(a.snapshot.seance.date)
+    || b.archivedAt.localeCompare(a.archivedAt));
+  const cards = entries.map(({ id, archivedAt, snapshot }) => {
+    const votes = snapshot.votes.map(v => {
+      const vs = voteVoters(v);
+      const r = tally(v, vs, voteSession(v));
+      const details = vs.map(e => `<li>${esc(e.nom)} — ${t("choice_" + choice(v, e.id))}</li>`).join("");
+      return `<article class="card">
+        <div class="row spread">
+          <h3>${esc(v.numero)}. ${esc(v.objet)}</h3>
+          <span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>
+        </div>
+        <div class="tally">${t("statVoters")} <b>${r.votants}</b> · ${t("choice_pour")} <b>${r.pour}</b> · ${t("choice_contre")} <b>${r.contre}</b> · ${t("tallyAbst")} <b>${r.abst}</b>${r.npp ? ` · ${t("tallyNpp")} <b>${r.npp}</b>` : ""}</div>
+        <details><summary>${t("voteDetails")}</summary><ul>${details}</ul></details>
+      </article>`;
+    }).join("");
+    return `<section class="section">
+      <div class="row spread">
+        <div><h2>${esc(snapshot.seance.titre || t("defaultSession"))} — ${esc(fmtDate(snapshot.seance.date))}</h2>
+        <p class="note">${t("historyArchivedAt", { date: new Date(archivedAt).toLocaleString(lang === "fr" ? "fr-FR" : "en-GB") })}</p></div>
+        <button class="b" ${attrs({ act: "restoreArchive", id })}>${t("historyRestore")}</button>
+      </div>
+      ${votes || `<p class="note">${t("historyNoVotes")}</p>`}
+    </section>`;
+  }).join("");
+
+  document.getElementById("history").innerHTML = `
+    <h2>${t("historyTitle", { n: entries.length })}</h2>
+    ${cards || `<p class="note">${t("historyEmpty")}</p>`}`;
 }
 
 /* ---------- onglet Votes ---------- */
 function renderVoteDetail(v, vs) {
   const rows = vs.map(e => {
     const c = choice(v, e.id);
-    const p = pres(e.id);
-    const via = p.present ? "" : `<div class="f">${t("viaProxy", { nom: esc(byId(p.mandataire).nom) })}</div>`;
+    const p = e;
+    const holder = vs.find(member => member.id === p.mandataire);
+    const via = p.present ? "" : `<div class="f">${t("viaProxy", { nom: esc(holder?.nom || "") })}</div>`;
     const btns = CHOIX.map(k => `<button class="${k}${c === k ? " on" : ""}" title="${t("choice_" + k)}" ${attrs({ act: "choice", vote: v.id, id: e.id, val: k })}>${
       t(k === "npp" ? "short_npp" : "choice_" + k)}</button>`).join("");
     return `<tr><td>${esc(e.nom)}${via}</td><td class="right"><div class="seg">${btns}</div></td></tr>`;
@@ -90,10 +126,10 @@ function renderVoteDetail(v, vs) {
 }
 
 function renderVotes() {
-  const vs = voters();
   const next = Math.max(0, ...S.votes.map(v => parseInt(v.numero) || 0)) + 1;
   const cards = S.votes.map(v => {
-    const r = tally(v, vs);
+    const vs = voteVoters(v);
+    const r = tally(v, vs, voteSession(v));
     const open = openVote === v.id;
     return `<div class="card">
       <div class="row spread">
