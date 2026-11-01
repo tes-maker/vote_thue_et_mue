@@ -83,6 +83,42 @@ Réponse : `204 No Content`.
 
 Erreurs possibles : `401 unauthorized`, `403 csrf_invalid`.
 
+### `GET /api/mandate` et `GET /api/v1/mandate`
+
+Récupère le mandat courant. Requiert une session valide ou le jeton bearer. Le mandat initial est 2026–2032 ; les mandats remplacés sont conservés dans l'historique.
+
+Réponse `200` :
+
+```json
+{
+  "mandate": { "id": "1", "startYear": 2026, "endYear": 2032 },
+  "revision": 1
+}
+```
+
+### `PUT /api/mandate` et `PUT /api/v1/mandate`
+
+Crée un nouveau mandat courant ou modifie le mandat courant. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer. L'année de fin doit être postérieure à l'année de début.
+
+Corps :
+
+```json
+{ "mode": "create", "startYear": 2026, "endYear": 2032 }
+```
+
+Utilisez `"mode": "edit"` pour modifier le mandat actuel. Une création conserve l'ancien mandat dans l'historique.
+
+Réponse `200` :
+
+```json
+{
+  "mandate": { "id": "2", "startYear": 2026, "endYear": 2032 },
+  "revision": 2
+}
+```
+
+Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `409 mandate_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque.
+
 ### `GET /api/state` et `GET /api/v1/state`
 
 Récupère l'état actif, les archives et la révision. Requiert une session valide ou le jeton bearer.

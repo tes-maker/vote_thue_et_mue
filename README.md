@@ -4,9 +4,13 @@ Application web pour préparer les séances du conseil municipal, saisir les pr�
 
 ## Aperçu des onglets
 
-### Séance & présences
+### Séance & présences — mode clair
 
-![Gestion de la séance et des présences](images/presence.png)
+![Gestion de la séance et des présences en mode clair](images/clair.png)
+
+### Séance & présences — mode sombre
+
+![Gestion de la séance et des présences en mode sombre](images/sombre.png)
 
 ### Liste des élus
 

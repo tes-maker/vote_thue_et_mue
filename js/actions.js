@@ -11,6 +11,26 @@ function showNotification(message, kind = "success") {
   showNotification.timer = setTimeout(() => box.classList.remove("show"), kind === "error" ? 12000 : 3000);
 }
 
+function populateMandateForm(mandate = MANDATE) {
+  const form = document.querySelector('#mandate-dialog form[data-submit="saveMandate"]');
+  form.elements.startYear.value = mandate.startYear;
+  form.elements.endYear.value = mandate.endYear;
+}
+
+function setMandateDialogMode(mode) {
+  const form = document.querySelector('#mandate-dialog form[data-submit="saveMandate"]');
+  form.dataset.mode = mode;
+  document.getElementById("mandate-dialog-title").textContent = t(
+    mode === "create" ? "mandateCreateTitle" : "mandateEditTitle",
+  );
+  document.getElementById("mandate-dialog-description").textContent = t(
+    mode === "create" ? "mandateCreateDescription" : "mandateEditDescription",
+  );
+  document.getElementById("save-mandate").textContent = t(
+    mode === "create" ? "saveNewMandate" : "saveMandateChanges",
+  );
+}
+
 const ON_CLICK = {
   tab: d => { navigateToTab(d.val); render(); },
   lang: d => setLang(d.val),
@@ -18,7 +38,22 @@ const ON_CLICK = {
   logout: () => logout(),
   exportCSV: () => exportCSV(),
   exportJSON: () => exportJSON(),
+  manageMandate: () => {
+    populateMandateForm();
+    setMandateDialogMode("edit");
+    document.getElementById("mandate-dialog").showModal();
+  },
+  editCurrentMandate: () => {
+    populateMandateForm();
+    setMandateDialogMode("edit");
+  },
+  newMandate: () => {
+    populateMandateForm({ startYear: "", endYear: "" });
+    setMandateDialogMode("create");
+  },
+  closeMandateDialog: () => document.getElementById("mandate-dialog").close(),
   archiveSession: async () => {
+    if (!confirm(t("confirmArchiveCurrentSession"))) return;
     if (await archiveCurrentSession()) {
       showNotification(t("archiveSuccess"));
       render();
@@ -114,6 +149,35 @@ const ON_CHANGE = {
 
 const ON_SUBMIT = {
   login: f => login(f),
+  saveMandate: async f => {
+    const mode = f.dataset.mode;
+    if (mode === "create" && !confirm(t("confirmCreateMandate"))) return;
+    const startYear = Number(f.elements.startYear.value);
+    const endYear = Number(f.elements.endYear.value);
+    if (endYear <= startYear) {
+      showNotification(t("mandateInvalidYears"), "error");
+      return;
+    }
+    try {
+      const result = await API.saveMandate({
+        startYear,
+        endYear,
+      }, mode, mandateRevision);
+      MANDATE = result.mandate;
+      mandateRevision = result.revision;
+      document.getElementById("mandate-dialog").close();
+      showNotification(t("mandateSaved"));
+      render();
+    } catch (error) {
+      console.error("Enregistrement du mandat impossible :", error);
+      showNotification(
+        error instanceof ApiError && error.status === 409
+          ? t("mandateConflict")
+          : t("mandateSaveFailure"),
+        "error",
+      );
+    }
+  },
   saveVoteTitle: f => {
     const voteId = f.dataset.vote;
     const type = f.dataset.type;

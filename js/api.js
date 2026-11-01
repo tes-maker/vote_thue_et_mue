@@ -45,6 +45,12 @@ const API = {
   }),
   logout: () => apiRequest("/api/auth/logout", { method: "POST" }),
   getState: () => apiRequest("/api/state"),
+  getMandate: () => apiRequest("/api/mandate"),
+  saveMandate: (mandate, mode, revision) => apiRequest("/api/mandate", {
+    method: "PUT",
+    headers: { "If-Match": String(revision) },
+    body: { ...mandate, mode },
+  }),
   saveState: (active, revision) => apiRequest("/api/state", {
     method: "PUT",
     headers: { "If-Match": String(revision) },

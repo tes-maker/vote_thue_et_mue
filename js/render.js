@@ -75,7 +75,14 @@ function renderPresence() {
   document.getElementById("presence").innerHTML = `
     <div class="row spread">
       <h2>${t("session")}</h2>
-      <button class="b primary" data-act="archiveSession">${t("archiveSession")}</button>
+      <div class="row">
+        <button class="b" data-act="manageMandate">${t("currentMandate", {
+          start: MANDATE.startYear,
+          end: MANDATE.endYear,
+        })}</button>
+        <button class="b primary" data-act="archiveSession">${t("archiveSession")}</button>
+        <button class="b" data-act="newSeance">${t("newSession")}</button>
+      </div>
     </div>
     <div class="grid">
       <label>${t("sessionTitle")}<input value="${esc(S.seance.titre)}" data-change="titre"></label>
@@ -95,9 +102,7 @@ function renderPresence() {
       <thead><tr><th>${t("colMember")}</th><th>${t("colAttendance")}</th><th>${t("colProxy")}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="section row">
-      <button class="b" data-act="newSeance">${t("newSession")}</button>
-    </div>`;
+    `;
 }
 
 function renderActiveVoteTitle(vote, type) {

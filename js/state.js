@@ -13,6 +13,8 @@ function uniqueId(id, used) {
   return replacement;
 }
 let revision = 0;
+let mandateRevision = 0;
+let MANDATE = { startYear: 2026, endYear: 2032 };
 let saveQueue = Promise.resolve(true);
 let saveError = null;
 
@@ -137,7 +139,7 @@ function readLegacyState() {
 }
 
 async function loadServerState() {
-  let remote = await API.getState();
+  let [remote, mandateRemote] = await Promise.all([API.getState(), API.getMandate()]);
   if (!remote.active) {
     const legacy = readLegacyState();
     const active = legacy?.active ?? normalize(fresh());
@@ -163,6 +165,8 @@ async function loadServerState() {
   ARCHIVES = normalizeArchives(remote.history);
   if (!S || ARCHIVES.length !== remote.history.length) throw new Error(t("loginDataError"));
   revision = remote.revision;
+  MANDATE = mandateRemote.mandate;
+  mandateRevision = mandateRemote.revision;
   saveError = null;
   saveQueue = Promise.resolve(true);
   setSaveStatus("serverSaved");

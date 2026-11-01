@@ -158,6 +158,19 @@ const archiveSchema = z.object({
     context.addIssue({ code: "custom", message: "L'identifiant de l'archive ne correspond pas à la séance." });
   }
 });
+const mandateSchema = z.object({
+  startYear: z.number().int().min(1900).max(9999),
+  endYear: z.number().int().min(1900).max(9999),
+}).refine(mandate => mandate.endYear > mandate.startYear, {
+  message: "L'année de fin doit être supérieure à l'année de début.",
+});
+const mandateInputSchema = z.object({
+  mode: z.enum(["create", "edit"]),
+  startYear: mandateSchema.shape.startYear,
+  endYear: mandateSchema.shape.endYear,
+}).refine(mandate => mandate.endYear > mandate.startYear, {
+  message: "L'année de fin doit être supérieure à l'année de début.",
+});
 
 function sendError(res, status, code) {
   return res.status(status).json({ error: code });
@@ -402,6 +415,75 @@ function createApp() {
     }
   });
 
+  app.get(["/api/mandate", "/api/v1/mandate"], requireAuth, async (_req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT id, start_year, end_year, revision
+         FROM mandate_periods WHERE is_current = TRUE`,
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("Aucun mandat courant n'est configuré.");
+      res.json({
+        mandate: { id: String(row.id), startYear: row.start_year, endYear: row.end_year },
+        revision: Number(row.revision),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put(["/api/mandate", "/api/v1/mandate"], requireAuth, requireCsrf, async (req, res, next) => {
+    const revision = expectedRevision(req, res);
+    if (revision === null) return;
+    const input = validate(mandateInputSchema, req.body, res);
+    if (!input) return;
+    try {
+      const result = await transaction(async client => {
+        await client.query("SELECT pg_advisory_xact_lock(948377)");
+        const currentResult = await client.query(
+          `SELECT id, revision FROM mandate_periods
+           WHERE is_current = TRUE FOR UPDATE`,
+        );
+        const current = currentResult.rows[0];
+        if (!current) throw new Error("Aucun mandat courant n'est configuré.");
+        if (Number(current.revision) !== revision) return null;
+
+        const nextRevision = revision + 1;
+        let mandateResult;
+        if (input.mode === "create") {
+          await client.query("UPDATE mandate_periods SET is_current = FALSE WHERE id = $1", [current.id]);
+          mandateResult = await client.query(
+            `INSERT INTO mandate_periods (start_year, end_year, revision, updated_by)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, start_year, end_year, revision`,
+            [input.startYear, input.endYear, nextRevision, req.authUserId],
+          );
+        } else {
+          mandateResult = await client.query(
+            `UPDATE mandate_periods
+             SET start_year = $1, end_year = $2, revision = $3, updated_by = $4
+             WHERE id = $5
+             RETURNING id, start_year, end_year, revision`,
+            [input.startYear, input.endYear, nextRevision, req.authUserId, current.id],
+          );
+        }
+        await client.query(
+          "INSERT INTO audit_log (user_id, action) VALUES ($1, $2)",
+          [req.authUserId, input.mode === "create" ? "mandate.created" : "mandate.updated"],
+        );
+        const row = mandateResult.rows[0];
+        return {
+          mandate: { id: String(row.id), startYear: row.start_year, endYear: row.end_year },
+          revision: Number(row.revision),
+        };
+      });
+      if (result === null) return sendError(res, 409, "mandate_conflict");
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.put(["/api/state", "/api/v1/state"], requireAuth, requireCsrf, async (req, res, next) => {
     const revision = expectedRevision(req, res);
     if (revision === null) return;
@@ -546,6 +628,8 @@ module.exports = {
   sessionSchema,
   archiveSchema,
   confidentialVoteSchema,
+  mandateSchema,
+  mandateInputSchema,
   isValidApiToken,
   requireAuth,
   requireCsrf,

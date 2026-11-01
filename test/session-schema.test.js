@@ -3,7 +3,7 @@ process.env.SESSION_SECRET ??= "test-session-secret-with-at-least-thirty-two-cha
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { archiveSchema, sessionSchema } = require("../server");
+const { archiveSchema, mandateInputSchema, mandateSchema, sessionSchema } = require("../server");
 
 function session() {
   const members = [
@@ -151,5 +151,21 @@ test("validates archive identifiers and snapshot shape", () => {
     id: "other",
     archivedAt: "2026-11-01T12:00:00.000Z",
     snapshot,
+  }).success, false);
+});
+
+test("validates current mandate years for creation and editing", () => {
+  assert.equal(mandateSchema.safeParse({ startYear: 2026, endYear: 2032 }).success, true);
+  assert.equal(mandateSchema.safeParse({ startYear: 2032, endYear: 2026 }).success, false);
+  assert.equal(mandateSchema.safeParse({ startYear: 2026, endYear: 2026 }).success, false);
+  assert.equal(mandateInputSchema.safeParse({
+    mode: "create",
+    startYear: 2026,
+    endYear: 2032,
+  }).success, true);
+  assert.equal(mandateInputSchema.safeParse({
+    mode: "edit",
+    startYear: 2026,
+    endYear: 2025,
   }).success, false);
 });

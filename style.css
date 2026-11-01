@@ -230,6 +230,17 @@ body.locked .login { display: flex; flex: 1; align-items: center; justify-conten
 .notification.show { opacity: 1; transform: translateY(0); }
 .notification.error { border-left-color: var(--erreur); }
 
+dialog#mandate-dialog {
+  width: min(560px, calc(100vw - 32px)); max-width: none; padding: 24px;
+  border: 1px solid var(--bordure); border-bottom: 4px solid var(--bleu-france);
+  background: var(--fond-surface); color: var(--texte);
+}
+dialog#mandate-dialog::backdrop { background: rgba(0, 0, 18, .5); }
+.mandate-form h2 { margin: 0 0 8px; }
+.mandate-form .note { margin: 0 0 20px; }
+.mandate-form .grid label { display: flex; flex-direction: column; gap: 8px; }
+.mandate-actions { margin-top: 24px; }
+
 :root[data-theme="dark"] button.member-status.active { background: #173b25; }
 :root[data-theme="dark"] .badge.ok { background: #173b25; }
 :root[data-theme="dark"] .badge.ko { background: #482525; }

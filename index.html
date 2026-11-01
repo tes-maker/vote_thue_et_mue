@@ -75,6 +75,27 @@
   <section id="history" class="hidden"></section>
 </main>
 
+<dialog id="mandate-dialog" aria-labelledby="mandate-dialog-title">
+  <form class="mandate-form" data-submit="saveMandate">
+    <h2 id="mandate-dialog-title"></h2>
+    <p id="mandate-dialog-description" class="note"></p>
+    <div class="grid">
+      <label><span data-i18n="mandateStartYear">Année de début</span>
+        <input name="startYear" type="number" min="1900" max="9999" step="1" required>
+      </label>
+      <label><span data-i18n="mandateEndYear">Année de fin</span>
+        <input name="endYear" type="number" min="1900" max="9999" step="1" required>
+      </label>
+    </div>
+    <div class="row mandate-actions">
+      <button class="b" type="button" data-act="editCurrentMandate" data-i18n="editCurrentMandate">Modifier le mandat actuel</button>
+      <button class="b" type="button" data-act="newMandate" data-i18n="createNewMandate">Créer un nouveau mandat</button>
+      <button class="b primary" id="save-mandate" type="submit"></button>
+      <button class="b" type="button" data-act="closeMandateDialog" data-i18n="cancel">Annuler</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="notification" class="notification" role="status" aria-live="polite"></div>
 
 <footer class="footer">
