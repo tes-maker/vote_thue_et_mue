@@ -13,6 +13,74 @@ Application web pour préparer les séances du conseil municipal, saisir les pr�
 - Les boutons **Exporter les résultats (CSV)** et **Exporter en JSON** téléchargent des copies destinées à l'exploitation ou à l'échange. Ils ne servent pas à sauvegarder le serveur.
 - À la première connexion après mise à jour, les anciennes données du navigateur sont migrées vers PostgreSQL si elles sont encore présentes. Elles ne sont supprimées du navigateur qu'après la migration réussie.
 
+## Lancer l'application en local
+
+Cette procédure est prévue pour Ubuntu ou Debian. Elle lance l'application uniquement sur votre ordinateur ; elle ne crée pas de service systemd et ne nécessite pas Nginx. Il faut Node.js 20 ou plus récent et PostgreSQL.
+
+Vérifiez que Node.js est installé, puis installez PostgreSQL s'il ne l'est pas déjà :
+
+```bash
+node --version
+npm --version
+sudo apt update
+sudo apt install postgresql
+```
+
+Créez un rôle et une base réservés à l'application :
+
+```bash
+sudo -u postgres psql
+```
+
+Dans l'invite PostgreSQL, saisissez :
+
+```sql
+CREATE ROLE vote_app LOGIN;
+CREATE DATABASE vote_app OWNER vote_app;
+\password vote_app
+\q
+```
+
+`\password` demande le mot de passe sans l'inscrire dans l'historique SQL. Pour éviter les caractères à encoder dans l'URL de connexion, vous pouvez générer un mot de passe hexadécimal avec `openssl rand -hex 16` avant d'ouvrir `psql`, puis le coller à la demande de `\password`. Si le rôle et la base existent déjà, ne relancez pas les deux commandes `CREATE` ; changez simplement le mot de passe avec `\password vote_app`.
+
+Depuis le dossier du projet, copiez le modèle de configuration local et protégez-le :
+
+```bash
+cd /opt/vote_thue_et_mue
+cp -n .env.example .env
+chmod 600 .env
+nano .env
+```
+
+Dans `.env`, configurez les valeurs suivantes. Remplacez le mot de passe par celui défini pour PostgreSQL et générez un secret de session neuf avec `openssl rand -hex 32` dans un autre terminal :
+
+```dotenv
+NODE_ENV=development
+HOST=127.0.0.1
+PORT=3000
+DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE_POSTGRES@127.0.0.1:5432/vote_app
+SESSION_SECRET=COLLER_ICI_UN_SECRET_GENERE_AVEC_OPENSSL
+TRUST_PROXY=0
+```
+
+Enregistrez le fichier dans `nano` avec **Ctrl+O**, puis **Entrée** ; quittez avec **Ctrl+X**. Le fichier `.env` est ignoré par Git : ne le partagez pas et n'y inscrivez pas des secrets déjà divulgués.
+
+Installez les dépendances, créez les tables et le compte administrateur :
+
+```bash
+npm ci
+npm run db:migrate
+npm run admin:create -- paul@exemple.fr
+```
+
+La commande de création du compte demande un mot de passe administrateur. Exécutez-la une seule fois pour créer ce compte. Si l'adresse existe déjà, ne relancez pas la commande : connectez-vous avec le compte existant. Pour démarrer l'application :
+
+```bash
+npm start
+```
+
+Ouvrez [http://127.0.0.1:3000](http://127.0.0.1:3000) dans votre navigateur et connectez-vous avec le compte créé. Le serveur reste actif dans le terminal ; **Ctrl+C** l'arrête. Les données sont stockées dans la base PostgreSQL locale.
+
 ## Installation sur un serveur Linux
 
 Exemple pour Ubuntu ou Debian avec PostgreSQL, Node.js 20 ou plus récent, et Nginx en HTTPS. Installez Node.js 20+ depuis une source de paquets approuvée par votre organisation, puis vérifiez `node --version` et `npm --version`. Les commandes d'administration sont à adapter à votre environnement.
@@ -70,8 +138,8 @@ Exemple de configuration (ne copiez pas les valeurs d'exemple telles quelles) :
 NODE_ENV=production
 HOST=127.0.0.1
 PORT=3000
-DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE@127.0.0.1:5432/vote_app
-SESSION_SECRET=COLLER_ICI_LE_SECRET_ALEATOIRE
+DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE_POSTGRES@127.0.0.1:5432/vote_app
+SESSION_SECRET=COLLER_ICI_UN_SECRET_GENERE_AVEC_OPENSSL
 TRUST_PROXY=1
 ```
 
