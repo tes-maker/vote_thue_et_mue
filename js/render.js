@@ -2,10 +2,8 @@
    Les boutons portent data-act (clic), les champs data-change (modification),
    les formulaires data-submit : voir actions.js. */
 const TAB_IDS = ["presence", "votes", "confidential", "elus", "history"];
-const initialPathTab = typeof window !== "undefined"
-  ? window.location.pathname.split("/").filter(Boolean).at(-1)
-  : null;
-let current = TAB_IDS.includes(initialPathTab) ? initialPathTab : "presence";
+const tabFromPath = () => window.location.pathname.split("/").filter(Boolean).at(-1);
+let current = typeof window !== "undefined" && TAB_IDS.includes(tabFromPath()) ? tabFromPath() : "presence";
 let openVote = null;
 let editingMember = null;
 let editingVoteTitle = null;
@@ -19,7 +17,7 @@ function navigateToTab(tab) {
 
 if (typeof window !== "undefined") {
   window.addEventListener("popstate", () => {
-    const pathTab = window.location.pathname.split("/").filter(Boolean).at(-1);
+    const pathTab = tabFromPath();
     current = TAB_IDS.includes(pathTab) ? pathTab : "presence";
     render();
   });
@@ -31,9 +29,13 @@ const option = (value, label, selected) => `<option value="${esc(value)}"${selec
 
 function render() {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.val === current));
-  for (const id of ["presence", "votes", "confidential", "elus", "history"]) document.getElementById(id).classList.toggle("hidden", id !== current);
+  for (const id of TAB_IDS) document.getElementById(id).classList.toggle("hidden", id !== current);
   document.getElementById("subtitle").textContent = t("subtitle", { titre: S.seance.titre || t("defaultSession"), date: fmtDate(S.seance.date) });
   ({ presence: renderPresence, votes: renderVotes, confidential: renderConfidentialVotes, elus: renderElus, history: renderHistory })[current]();
+}
+
+function renderVoteTally(result) {
+  return `<div class="tally">${t("statVoters")} <b>${result.votants}</b> · ${t("choice_pour")} <b>${result.pour}</b> · ${t("choice_contre")} <b>${result.contre}</b> · ${t("tallyAbst")} <b>${result.abst}</b>${result.npp ? ` · ${t("tallyNpp")} <b>${result.npp}</b>` : ""}</div>`;
 }
 
 function renderStats() {
@@ -105,8 +107,8 @@ function renderPresence() {
     `;
 }
 
-function renderActiveVoteTitle(vote, type) {
-  const isEditing = editingVoteTitle?.voteId === vote.id && editingVoteTitle.type === type;
+function renderVoteTitle(vote, type = null) {
+  const isEditing = type !== null && editingVoteTitle?.voteId === vote.id && editingVoteTitle.type === type;
   if (isEditing) {
     return `<form class="row archive-vote-title" data-submit="saveVoteTitle" ${attrs({
       vote: vote.id,
@@ -117,15 +119,10 @@ function renderActiveVoteTitle(vote, type) {
       <button class="b" type="button" data-act="cancelVoteTitle">${t("cancel")}</button>
     </form>`;
   }
+  const editButton = type === null ? "" : `<button class="link" ${attrs({ act: "editVoteTitle", vote: vote.id, type })}>${t("editTitle")}</button>`;
   return `<div class="row spread archive-vote-title">
     <h3>${esc(vote.numero)}. ${esc(vote.objet)}</h3>
-    <button class="link" ${attrs({ act: "editVoteTitle", vote: vote.id, type })}>${t("editTitle")}</button>
-  </div>`;
-}
-
-function renderArchivedVoteTitle(vote) {
-  return `<div class="row spread archive-vote-title">
-    <h3>${esc(vote.numero)}. ${esc(vote.objet)}</h3>
+    ${editButton}
   </div>`;
 }
 
@@ -138,11 +135,11 @@ function renderHistory() {
       const r = tally(v, vs, voteSession(v));
       const details = vs.map(e => `<li>${esc(e.nom)} — ${t("choice_" + choice(v, e.id))}</li>`).join("");
       return `<article class="card">
-        ${renderArchivedVoteTitle(v)}
+        ${renderVoteTitle(v)}
         <div class="row spread">
           <span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>
         </div>
-        <div class="tally">${t("statVoters")} <b>${r.votants}</b> · ${t("choice_pour")} <b>${r.pour}</b> · ${t("choice_contre")} <b>${r.contre}</b> · ${t("tallyAbst")} <b>${r.abst}</b>${r.npp ? ` · ${t("tallyNpp")} <b>${r.npp}</b>` : ""}</div>
+        ${renderVoteTally(r)}
         <details><summary>${t("voteDetails")}</summary><ul>${details}</ul></details>
       </article>`;
     }).join("");
@@ -150,7 +147,7 @@ function renderHistory() {
       const totals = confidentialTotals(v);
       const options = v.options.map(option => `<li>${esc(option.nom)} — ${option.voix}</li>`).join("");
       return `<article class="card">
-        ${renderArchivedVoteTitle(v)}
+        ${renderVoteTitle(v)}
         <div class="row spread"><span class="badge">${t("confidentialLabel")}</span></div>
         <div class="tally">${t("confidentialTotal")} <b>${totals.total}</b> / ${v.limite} · ${t("confidentialAbstentions")} <b>${v.abstentions}</b> · ${t("confidentialNpp")} <b>${v.npp}</b></div>
         <ul>${options || `<li>${t("noOptions")}</li>`}</ul>
@@ -198,14 +195,14 @@ function renderVotes() {
     const open = openVote === v.id;
     return `<div class="card">
       <div class="row spread">
-      ${renderActiveVoteTitle(v, "nominal")}
+      ${renderVoteTitle(v, "nominal")}
         <div class="row">
           <span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>
           <button class="b" ${attrs({ act: "toggleVote", vote: v.id })}>${t(open ? "close" : "enterVotes")}</button>
           <button class="link" ${attrs({ act: "delVote", vote: v.id })}>${t("delete")}</button>
         </div>
       </div>
-      <div class="tally">${t("statVoters")} <b>${r.votants}</b> · ${t("choice_pour")} <b>${r.pour}</b> · ${t("choice_contre")} <b>${r.contre}</b> · ${t("tallyAbst")} <b>${r.abst}</b>${r.npp ? ` · ${t("tallyNpp")} <b>${r.npp}</b>` : ""}</div>
+      ${renderVoteTally(r)}
       ${open ? renderVoteDetail(v, vs) : ""}
     </div>`;
   }).join("");
@@ -286,7 +283,7 @@ function renderConfidentialVotes() {
     </tr>`).join("");
     return `<article class="card" ${attrs({ "confidential-vote": v.id })}>
       <div class="row spread">
-        ${renderActiveVoteTitle(v, "confidential")}
+        ${renderVoteTitle(v, "confidential")}
         <button class="link" ${attrs({ act: "delConfidentialVote", vote: v.id })}>${t("delete")}</button>
       </div>
       <p class="note" data-confidential-limit>${t("confidentialLimit", { total: totals.total, limite: v.limite })}</p>

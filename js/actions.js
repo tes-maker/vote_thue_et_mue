@@ -251,6 +251,14 @@ const ON_SUBMIT = {
   },
 };
 
+function dispatchAction(action) {
+  try {
+    Promise.resolve(action()).catch(handleActionError);
+  } catch (error) {
+    handleActionError(error);
+  }
+}
+
 const findVote = id => S.votes.find(v => v.id === id);
 const findConfidentialVote = id => S.votesConfidentiels.find(v => v.id === id);
 
@@ -263,11 +271,7 @@ document.addEventListener("click", ev => {
     showNotification(t("stateConflict"), "error");
     return;
   }
-  try {
-    Promise.resolve(ON_CLICK[el.dataset.act]?.(el.dataset)).catch(handleActionError);
-  } catch (error) {
-    handleActionError(error);
-  }
+  dispatchAction(() => ON_CLICK[el.dataset.act]?.(el.dataset));
 });
 document.addEventListener("change", ev => {
   const el = ev.target.closest("[data-change]");
@@ -277,11 +281,7 @@ document.addEventListener("change", ev => {
     render();
     return;
   }
-  try {
-    Promise.resolve(ON_CHANGE[el.dataset.change]?.(el.dataset, el.value, el)).catch(handleActionError);
-  } catch (error) {
-    handleActionError(error);
-  }
+  dispatchAction(() => ON_CHANGE[el.dataset.change]?.(el.dataset, el.value, el));
 });
 document.addEventListener("submit", ev => {
   ev.preventDefault();
@@ -289,11 +289,7 @@ document.addEventListener("submit", ev => {
     showNotification(t("stateConflict"), "error");
     return;
   }
-  try {
-    Promise.resolve(ON_SUBMIT[ev.target.dataset.submit]?.(ev.target)).catch(handleActionError);
-  } catch (error) {
-    handleActionError(error);
-  }
+  dispatchAction(() => ON_SUBMIT[ev.target.dataset.submit]?.(ev.target));
 });
 
 function handleActionError(error) {

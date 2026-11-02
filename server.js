@@ -164,12 +164,8 @@ const mandateSchema = z.object({
 }).refine(mandate => mandate.endYear > mandate.startYear, {
   message: "L'année de fin doit être supérieure à l'année de début.",
 });
-const mandateInputSchema = z.object({
+const mandateInputSchema = mandateSchema.safeExtend({
   mode: z.enum(["create", "edit"]),
-  startYear: mandateSchema.shape.startYear,
-  endYear: mandateSchema.shape.endYear,
-}).refine(mandate => mandate.endYear > mandate.startYear, {
-  message: "L'année de fin doit être supérieure à l'année de début.",
 });
 
 function sendError(res, status, code) {

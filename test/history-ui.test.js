@@ -84,12 +84,12 @@ test("offers title editing for active nominal and confidential votes", () => {
     context,
   );
 
-  const nominal = vm.runInContext('renderActiveVoteTitle({ id: "vote1", numero: "1", objet: "Vote nominal" }, "nominal")', context);
-  const confidential = vm.runInContext('renderActiveVoteTitle({ id: "vote2", numero: "2", objet: "Vote secret" }, "confidential")', context);
+  const nominal = vm.runInContext('renderVoteTitle({ id: "vote1", numero: "1", objet: "Vote nominal" }, "nominal")', context);
+  const confidential = vm.runInContext('renderVoteTitle({ id: "vote2", numero: "2", objet: "Vote secret" }, "confidential")', context);
   assert.match(nominal, /data-act="editVoteTitle" data-vote="vote1" data-type="nominal"/);
   assert.match(confidential, /data-act="editVoteTitle" data-vote="vote2" data-type="confidential"/);
   vm.runInContext('editingVoteTitle = { voteId: "vote2", type: "confidential" }', context);
-  const form = vm.runInContext('renderActiveVoteTitle({ id: "vote2", numero: "2", objet: "Vote secret" }, "confidential")', context);
+  const form = vm.runInContext('renderVoteTitle({ id: "vote2", numero: "2", objet: "Vote secret" }, "confidential")', context);
   assert.match(form, /data-submit="saveVoteTitle"/);
   assert.match(form, /value="Vote secret"/);
 });

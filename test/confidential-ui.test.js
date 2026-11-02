@@ -257,9 +257,13 @@ test("dark logo assets turn unclassified black paths white while preserving colo
   assert.match(communalLogo, /\.st2\s*\{\s*fill:#C1D566/);
 });
 
-test("README displays only the two available screenshots", () => {
+test("README references only available screenshots", () => {
   const readme = fs.readFileSync(path.join(__dirname, "../README.md"), "utf8");
   const images = [...readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map(match => match[1]);
-  assert.deepEqual(images.filter(image => image.startsWith("images/")), ["images/presence.png", "images/list.png"]);
-  assert.equal(images.length, 2);
+  const screenshots = images.filter(image => image.startsWith("images/"));
+  assert.deepEqual(screenshots, ["images/clair.png", "images/sombre.png", "images/list.png"]);
+  assert.equal(images.length, screenshots.length);
+  for (const image of screenshots) {
+    assert.equal(fs.existsSync(path.join(__dirname, "..", image)), true, `${image} should exist`);
+  }
 });
