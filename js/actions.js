@@ -1,9 +1,16 @@
 /* ---------- actions déclenchées par l'interface ----------
-   d = dataset de l'élément (data-id, data-val, data-vote…) */
+   Un seul écouteur par type d'événement (en fin de fichier) appelle le gestionnaire
+   nommé par l'élément : data-act -> ON_CLICK, data-change -> ON_CHANGE,
+   data-submit -> ON_SUBMIT. d = dataset de l'élément (data-id, data-val, data-vote…).
+   Une action modifie S, puis appelle commit() pour afficher et enregistrer. */
+
+const findVote = id => S.votes.find(v => v.id === id);
+const findConfidentialVote = id => S.votesConfidentiels.find(v => v.id === id);
+/** Texte saisi dans un champ de formulaire, sans les espaces de début et de fin. */
+const field = (form, name) => form.elements[name].value.trim();
 
 function showNotification(message, kind = "success") {
   const box = document.getElementById("notification");
-  if (!box) return;
   box.textContent = message;
   box.classList.toggle("error", kind === "error");
   box.classList.add("show");
@@ -11,24 +18,16 @@ function showNotification(message, kind = "success") {
   showNotification.timer = setTimeout(() => box.classList.remove("show"), kind === "error" ? 12000 : 3000);
 }
 
-function populateMandateForm(mandate = MANDATE) {
-  const form = document.querySelector('#mandate-dialog form[data-submit="saveMandate"]');
-  form.elements.startYear.value = mandate.startYear;
-  form.elements.endYear.value = mandate.endYear;
-}
-
-function setMandateDialogMode(mode) {
+/** Prépare la fenêtre du mandat : "edit" corrige le mandat courant, "create" en démarre un nouveau. */
+function setMandateForm(mode) {
+  const creating = mode === "create";
   const form = document.querySelector('#mandate-dialog form[data-submit="saveMandate"]');
   form.dataset.mode = mode;
-  document.getElementById("mandate-dialog-title").textContent = t(
-    mode === "create" ? "mandateCreateTitle" : "mandateEditTitle",
-  );
-  document.getElementById("mandate-dialog-description").textContent = t(
-    mode === "create" ? "mandateCreateDescription" : "mandateEditDescription",
-  );
-  document.getElementById("save-mandate").textContent = t(
-    mode === "create" ? "saveNewMandate" : "saveMandateChanges",
-  );
+  form.elements.startYear.value = creating ? "" : MANDATE.startYear;
+  form.elements.endYear.value = creating ? "" : MANDATE.endYear;
+  document.getElementById("mandate-dialog-title").textContent = t(creating ? "mandateCreateTitle" : "mandateEditTitle");
+  document.getElementById("mandate-dialog-description").textContent = t(creating ? "mandateCreateDescription" : "mandateEditDescription");
+  document.getElementById("save-mandate").textContent = t(creating ? "saveNewMandate" : "saveMandateChanges");
 }
 
 const ON_CLICK = {
@@ -39,18 +38,11 @@ const ON_CLICK = {
   exportCSV: () => exportCSV(),
   exportJSON: () => exportJSON(),
   manageMandate: () => {
-    populateMandateForm();
-    setMandateDialogMode("edit");
+    setMandateForm("edit");
     document.getElementById("mandate-dialog").showModal();
   },
-  editCurrentMandate: () => {
-    populateMandateForm();
-    setMandateDialogMode("edit");
-  },
-  newMandate: () => {
-    populateMandateForm({ startYear: "", endYear: "" });
-    setMandateDialogMode("create");
-  },
+  editCurrentMandate: () => setMandateForm("edit"),
+  newMandate: () => setMandateForm("create"),
   closeMandateDialog: () => document.getElementById("mandate-dialog").close(),
   archiveSession: async () => {
     if (!confirm(t("confirmArchiveCurrentSession"))) return;
@@ -81,7 +73,7 @@ const ON_CLICK = {
   toggleVote: d => { openVote = openVote === d.vote ? null : d.vote; render(); },
   delVote: d => { if (confirm(t("confirmDelItem"))) { S.votes = S.votes.filter(v => v.id !== d.vote); commit(); } },
   choice: d => { findVote(d.vote).choix[d.id] = d.val; commit(); },
-  setAll: d => { const v = findVote(d.vote); voteVoters(v).forEach(e => { v.choix[e.id] = d.val; }); commit(); },
+  setAll: d => { const v = findVote(d.vote); v.electeurs.forEach(e => { v.choix[e.id] = d.val; }); commit(); },
   delConfidentialVote: d => {
     if (confirm(t("confirmDelItem"))) {
       S.votesConfidentiels = S.votesConfidentiels.filter(v => v.id !== d.vote);
@@ -98,19 +90,11 @@ const ON_CLICK = {
     const vote = findConfidentialVote(d.vote);
     if (!vote) return;
     const delta = Number(d.delta);
-    if (!Number.isInteger(delta) || ![-1, 1].includes(delta)) return;
-    const currentCount = d.target === "abstentions" || d.target === "npp"
-      ? vote[d.target]
-      : vote.options.find(option => option.id === d.id)?.voix;
-    if (!Number.isInteger(currentCount) || currentCount + delta < 0) return;
-    const total = vote.abstentions + vote.npp + vote.options.reduce((sum, option) => sum + option.voix, 0);
-    if (delta > 0 && total >= vote.limite) return;
-    if (d.target === "abstentions" || d.target === "npp") vote[d.target] += delta;
-    else {
-      const option = vote.options.find(item => item.id === d.id);
-      if (!option) return;
-      option.voix += delta;
-    }
+    const count = confidentialCount(vote, d.target, d.id);
+    if (!Number.isInteger(count) || count + delta < 0) return;
+    if (delta > 0 && confidentialTotal(vote) >= vote.limite) return;
+    if (d.target === "option") vote.options.find(option => option.id === d.id).voix += delta;
+    else vote[d.target] += delta;
     commit({ render: false });
     refreshConfidentialVote(vote);
   },
@@ -142,7 +126,12 @@ const ON_CLICK = {
 
 const ON_CHANGE = {
   titre: (d, val) => { S.seance.titre = val; commit(); },
-  date: (d, val) => { S.seance.date = val; commit(); },
+  date: (d, val) => {
+    // Le serveur exige une date : un champ vidé est ignoré et la date en place réaffichée.
+    if (!val) return render();
+    S.seance.date = val;
+    commit();
+  },
   president: (d, val) => { S.seance.president = val; commit(); },
   mandataire: (d, val) => { pres(d.id).mandataire = val || null; commit(); },
 };
@@ -152,17 +141,14 @@ const ON_SUBMIT = {
   saveMandate: async f => {
     const mode = f.dataset.mode;
     if (mode === "create" && !confirm(t("confirmCreateMandate"))) return;
-    const startYear = Number(f.elements.startYear.value);
-    const endYear = Number(f.elements.endYear.value);
+    const startYear = Number(field(f, "startYear"));
+    const endYear = Number(field(f, "endYear"));
     if (endYear <= startYear) {
       showNotification(t("mandateInvalidYears"), "error");
       return;
     }
     try {
-      const result = await API.saveMandate({
-        startYear,
-        endYear,
-      }, mode, mandateRevision);
+      const result = await API.saveMandate({ startYear, endYear }, mode, mandateRevision);
       MANDATE = result.mandate;
       mandateRevision = result.revision;
       document.getElementById("mandate-dialog").close();
@@ -170,33 +156,23 @@ const ON_SUBMIT = {
       render();
     } catch (error) {
       console.error("Enregistrement du mandat impossible :", error);
-      showNotification(
-        error instanceof ApiError && error.status === 409
-          ? t("mandateConflict")
-          : t("mandateSaveFailure"),
-        "error",
-      );
+      showNotification(t(isConflict(error) ? "mandateConflict" : "mandateSaveFailure"), "error");
     }
   },
   saveVoteTitle: f => {
-    const voteId = f.dataset.vote;
-    const type = f.dataset.type;
-    const objet = f.elements.objet.value.trim();
-    if (!voteId || !objet) return;
-    const vote = type === "confidential"
-      ? findConfidentialVote(voteId)
-      : findVote(voteId);
-    if (!vote) return;
+    const objet = field(f, "objet");
+    const vote = (f.dataset.type === "confidential" ? findConfidentialVote : findVote)(f.dataset.vote);
+    if (!vote || !objet) return;
     vote.objet = objet;
     editingVoteTitle = null;
     commit();
   },
   addVote: f => {
-    const objet = f.elements.objet.value.trim();
+    const objet = field(f, "objet");
     if (!objet) return;
     const v = {
       id: uid(),
-      numero: f.elements.numero.value.trim(),
+      numero: field(f, "numero") || String(nextNumber(S.votes, S.votesConfidentiels)),
       objet,
       choix: {},
       electeurs: voters().map(e => ({ ...e, ...pres(e.id) })),
@@ -207,96 +183,81 @@ const ON_SUBMIT = {
     commit();
   },
   addConfidentialVote: f => {
-    const objet = f.elements.objet.value.trim();
+    const objet = field(f, "objet");
     if (!objet) return;
-    const numero = f.elements.numero.value.trim();
-    const highestNumber = Math.max(
-      0,
-      ...S.votes.map(v => parseInt(v.numero, 10) || 0),
-      ...S.votesConfidentiels.map(v => parseInt(v.numero, 10) || 0),
-    );
-    const vote = {
+    S.votesConfidentiels.push({
       id: uid(),
-      numero: numero || String(highestNumber + 1),
+      numero: field(f, "numero") || String(nextNumber(S.votes, S.votesConfidentiels)),
       objet,
       limite: S.elus.filter(member => member.actif).length,
       options: [],
       abstentions: 0,
       npp: 0,
-    };
-    S.votesConfidentiels.push(vote);
+    });
     commit();
   },
   addConfidentialOption: f => {
     const vote = findConfidentialVote(f.dataset.vote);
-    const nom = f.elements.nom.value.trim();
+    const nom = field(f, "nom");
     if (!vote || !nom) return;
     vote.options.push({ id: uid(), nom, voix: 0 });
     commit();
   },
   addElu: f => {
-    const nom = f.elements.nom.value.trim();
+    const nom = field(f, "nom");
     if (!nom) return;
-    S.elus.push({ id: uid(), nom, fonction: f.elements.fonction.value.trim(), actif: true });
+    S.elus.push({ id: uid(), nom, fonction: field(f, "fonction"), actif: true });
     commit();
   },
   saveElu: f => {
     const member = byId(f.dataset.id);
-    const nom = f.elements.nom.value.trim();
+    const nom = field(f, "nom");
     if (!member || !nom) return;
     member.nom = nom;
-    member.fonction = f.elements.fonction.value.trim();
+    member.fonction = field(f, "fonction");
     editingMember = null;
     commit();
   },
 };
 
-function dispatchAction(action) {
+/** Exécute une action et signale son échec, qu'elle soit synchrone ou non. */
+async function dispatchAction(action) {
   try {
-    Promise.resolve(action()).catch(handleActionError);
+    await action();
   } catch (error) {
-    handleActionError(error);
+    console.error("Action impossible :", error);
+    if (isConflict(error)) saveError = error;
+    showNotification(failureMessage(error), "error");
   }
 }
 
-const findVote = id => S.votes.find(v => v.id === id);
-const findConfidentialVote = id => S.votesConfidentiels.find(v => v.id === id);
+/** Après un échec d'enregistrement, seules les actions sans écriture restent possibles. */
+function blockedBySaveError() {
+  if (saveError) showNotification(failureMessage(saveError), "error");
+  return Boolean(saveError);
+}
 
-// Un seul écouteur par type d'événement pour toute la page
+const ACTIONS_WITHOUT_WRITE = ["tab", "lang", "logout"];
+
 document.addEventListener("click", ev => {
   const el = ev.target.closest("[data-act]");
   if (!el) return;
   ev.preventDefault();
-  if (saveError && !["tab", "lang", "logout"].includes(el.dataset.act)) {
-    showNotification(t("stateConflict"), "error");
-    return;
-  }
+  if (!ACTIONS_WITHOUT_WRITE.includes(el.dataset.act) && blockedBySaveError()) return;
   dispatchAction(() => ON_CLICK[el.dataset.act]?.(el.dataset));
 });
 document.addEventListener("change", ev => {
   const el = ev.target.closest("[data-change]");
   if (!el) return;
-  if (saveError) {
-    showNotification(t("stateConflict"), "error");
+  if (blockedBySaveError()) {
     render();
     return;
   }
-  dispatchAction(() => ON_CHANGE[el.dataset.change]?.(el.dataset, el.value, el));
+  dispatchAction(() => ON_CHANGE[el.dataset.change]?.(el.dataset, el.value));
 });
 document.addEventListener("submit", ev => {
   ev.preventDefault();
-  if (saveError) {
-    showNotification(t("stateConflict"), "error");
-    return;
-  }
+  // Se reconnecter recharge les données du serveur : c'est la sortie normale après un échec.
+  if (ev.target.dataset.submit !== "login" && blockedBySaveError()) return;
   dispatchAction(() => ON_SUBMIT[ev.target.dataset.submit]?.(ev.target));
 });
-
-function handleActionError(error) {
-  console.error("Action impossible :", error);
-  if (error instanceof ApiError && error.status === 409) saveError = error;
-  showNotification(
-    error instanceof ApiError && error.status === 409 ? t("stateConflict") : t("saveFailure"),
-    "error",
-  );
-}

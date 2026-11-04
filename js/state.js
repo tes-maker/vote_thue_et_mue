@@ -1,205 +1,70 @@
-/* ---------- état de la séance (enregistré sur le serveur) ---------- */
-const ID_RE = /^[a-z0-9]+$/;
-const validId = id => typeof id === "string" && ID_RE.test(id);
-function uniqueId(id, used) {
-  if (validId(id) && !used.has(id)) {
-    used.add(id);
-    return id;
-  }
-  let replacement;
-  do replacement = uid();
-  while (!validId(replacement) || used.has(replacement));
-  used.add(replacement);
-  return replacement;
-}
+/* ---------- état de la séance et enregistrement sur le serveur ----------
+   S contient la séance en cours. Une action la modifie, puis appelle commit(). */
+let S = null;
+let ARCHIVES = [];
+let MANDATE = null;
+
+/** Révisions connues du serveur, renvoyées à chaque écriture (voir If-Match dans endpoints.md). */
 let revision = 0;
 let mandateRevision = 0;
-let MANDATE = { startYear: 2026, endYear: 2032 };
+
+/** Promesse du dernier enregistrement : true s'il a réussi. */
 let saveQueue = Promise.resolve(true);
+/** Après un échec, plus rien n'est enregistré : les écritures suivantes écraseraient l'autre poste. */
 let saveError = null;
 
+/* ---------- création et chargement ---------- */
+
+/** Nouvelle séance : tous les élus en exercice sont présents par défaut. */
 function fresh(elus = DEFAULT_ELUS.map(([nom, fonction]) => ({ id: uid(), nom, fonction, actif: true }))) {
   return {
     elus,
     seance: { id: uid(), titre: "Conseil municipal", date: today(), president: elus[0]?.id ?? null },
-    presence: {},
+    presence: Object.fromEntries(elus.map(e => [e.id, { present: e.actif, mandataire: null }])),
     votes: [],
     votesConfidentiels: [],
   };
 }
 
-// Vérifie et complète des données venant du navigateur ou d'un fichier ; null si invalides.
-function normalize(s) {
-  if (!s || !Array.isArray(s.elus) || !s.elus.every(e => validId(e?.id))) return null;
-  const seance = typeof s.seance === "object" && s.seance ? s.seance : {};
-  const elus = s.elus.map(e => ({
-    id: e.id,
-    nom: String(e.nom ?? ""),
-    fonction: String(e.fonction ?? ""),
-    actif: typeof e.actif === "boolean" ? e.actif : true,
-  }));
-  const presence = {};
-  elus.forEach(e => {
-    const p = s.presence?.[e.id];
-    presence[e.id] = {
-      present: e.actif && p?.present !== false,
-      mandataire: e.actif && validId(p?.mandataire) ? p.mandataire : null,
-    };
-  });
-  const rawVotes = Array.isArray(s.votes) ? s.votes : [];
-  if (rawVotes.some(vote => !vote || typeof vote !== "object" || Array.isArray(vote))) return null;
-  const usedVoteIds = new Set();
-  const votes = rawVotes.map(vote => ({ ...vote, id: uniqueId(vote.id, usedVoteIds) }));
-  const votesConfidentiels = Array.isArray(s.votesConfidentiels)
-    ? s.votesConfidentiels.filter(v => v && typeof v === "object" && !Array.isArray(v)).map(v => ({
-        id: validId(v.id) ? v.id : uid(),
-        numero: String(v.numero ?? ""),
-        objet: String(v.objet ?? ""),
-        limite: Number.isInteger(v.limite) ? v.limite : elus.filter(member => member.actif).length,
-        options: Array.isArray(v.options ?? v.structures)
-          ? (v.options ?? v.structures).filter(option => validId(option?.id)).map(option => ({
-              id: option.id,
-              nom: String(option.nom ?? ""),
-              voix: Number.isInteger(option.voix) ? option.voix : 0,
-            }))
-          : [],
-        abstentions: Number.isInteger(v.abstentions) ? v.abstentions : 0,
-        npp: Number.isInteger(v.npp) ? v.npp : 0,
-      }))
-    : [];
-  return {
-    elus,
-    seance: {
-      id: validId(seance.id) ? seance.id : uid(),
-      titre: String(seance.titre ?? "Conseil municipal"),
-      date: String(seance.date ?? today()),
-      president: seance.president ?? s.elus[0]?.id ?? null,
-    },
-    presence,
-    votesConfidentiels,
-    votes: votes.map(v => ({
-      id: v.id,
-      numero: String(v.numero ?? ""),
-      objet: String(v.objet ?? ""),
-      choix: v.choix && typeof v.choix === "object" ? v.choix : {},
-      electeurs: Array.isArray(v.electeurs)
-        ? v.electeurs.filter(e => validId(e?.id)).map(e => ({
-            id: e.id,
-            nom: String(e.nom ?? ""),
-            fonction: String(e.fonction ?? ""),
-            actif: typeof e.actif === "boolean" ? e.actif : true,
-            present: e.present !== false,
-            mandataire: validId(e.mandataire) ? e.mandataire : null,
-          }))
-        : elus.filter(e => presence[e.id].present || presence[e.id].mandataire).map(e => ({
-            ...e,
-            ...presence[e.id],
-          })),
-      president: validId(v.president) ? v.president : seance.president ?? null,
-    })),
-  };
-}
-
-function normalizeArchives(value) {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap(entry => {
-    const snapshot = normalize(entry?.snapshot);
-    if (!snapshot) return [];
-    const archivedAt = typeof entry?.archivedAt === "string" && !Number.isNaN(Date.parse(entry.archivedAt))
-      ? new Date(entry.archivedAt).toISOString() : new Date(0).toISOString();
-    return [{ id: snapshot.seance.id, archivedAt, snapshot }];
-  });
-}
-
-function readLegacyState() {
-  let activeText;
-  let historyText;
-  try {
-    activeText = localStorage.getItem(KEY);
-    historyText = localStorage.getItem(HISTORY_KEY);
-  } catch {
-    throw new Error(t("loginDataError"));
-  }
-  if (activeText === null && historyText === null) return null;
-
-  let active;
-  let history;
-  try {
-    active = activeText === null ? normalize(fresh()) : normalize(JSON.parse(activeText));
-    const parsedHistory = historyText === null ? [] : JSON.parse(historyText);
-    history = normalizeArchives(parsedHistory);
-    if (historyText !== null && (!Array.isArray(parsedHistory) || history.length !== parsedHistory.length)) {
-      throw new Error(t("loginDataError"));
-    }
-  } catch {
-    throw new Error(t("loginDataError"));
-  }
-  if (!active) throw new Error(t("loginDataError"));
-  return { active, history };
-}
-
+/** Charge les données du serveur, qui les a validées, et crée la séance initiale sur une base vide. */
 async function loadServerState() {
   let [remote, mandateRemote] = await Promise.all([API.getState(), API.getMandate()]);
   if (!remote.active) {
-    const legacy = readLegacyState();
-    const active = legacy?.active ?? normalize(fresh());
-    try {
-      if (legacy) await API.importState(active, legacy.history, remote.revision);
-      else await API.saveState(active, remote.revision);
-      remote = await API.getState();
-      if (legacy) {
-        try {
-          localStorage.removeItem(KEY);
-          localStorage.removeItem(HISTORY_KEY);
-        } catch {
-          showNotification(t("legacyCopyRemains"), "error");
-        }
-      }
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 409) throw error;
-      remote = await API.getState();
-      if (legacy) showNotification(t("migrationConflict"), "error");
-    }
+    // En cas de conflit, un autre poste vient d'initialiser la base : on reprend sa séance.
+    await API.saveState(fresh(), remote.revision).catch(error => {
+      if (!isConflict(error)) throw error;
+    });
+    remote = await API.getState();
   }
-  S = normalize(remote.active);
-  ARCHIVES = normalizeArchives(remote.history);
-  if (!S || ARCHIVES.length !== remote.history.length) throw new Error(t("loginDataError"));
+  S = remote.active;
+  ARCHIVES = remote.history;
   revision = remote.revision;
   MANDATE = mandateRemote.mandate;
   mandateRevision = mandateRemote.revision;
   saveError = null;
   saveQueue = Promise.resolve(true);
-  setSaveStatus("serverSaved");
+  renderSaveStatus();
   sanitize();
 }
-
-let S = fresh();
-let ARCHIVES = [];
 
 /* ---------- présences et procurations ---------- */
 const byId = id => S.elus.find(e => e.id === id);
 const pres = id => S.presence[id];
 const isPresent = id => pres(id).present;
-const isVoter = e => e.actif && (isPresent(e.id) || !!pres(e.id).mandataire);
-const voters = () => S.elus.filter(isVoter);
-const voteVoters = v => v.electeurs;
-const voteSession = v => ({ president: v.president });
-const statut = e => t(isPresent(e.id) ? "present" : pres(e.id).mandataire ? "represented" : "absent");
+/** Électeurs d'un nouveau vote : élus en exercice, présents ou représentés. */
+const voters = () => S.elus.filter(e => e.actif && (isPresent(e.id) || !!pres(e.id).mandataire));
 
-// Porteur de procuration -> élus absents qu'il représente
+/** Porteur de procuration -> élus absents qu'il représente. */
 function proxies() {
   const m = new Map();
   S.elus.forEach(e => {
     const h = pres(e.id).mandataire;
-    if (h && byId(h)) {
-      const members = m.get(h) ?? [];
-      members.push(e);
-      m.set(h, members);
-    }
+    if (h) m.set(h, [...(m.get(h) ?? []), e]);
   });
   return m;
 }
 
+/** Chiffres clés : le quorum, majorité des élus en exercice, ne tient compte que des présents. */
 function counts() {
   const active = S.elus.filter(e => e.actif);
   const n = active.length;
@@ -209,7 +74,7 @@ function counts() {
   return { n, p, r, a: n - p - r, quorum, quorumOk: p >= quorum };
 }
 
-// Garde la cohérence : chaque élu a une présence, et la procuration ne peut être donnée qu'à un élu présent.
+/** Rétablit les règles après une modification : mêmes règles que server/schemas.js. */
 function sanitize() {
   S.elus.forEach(e => {
     const p = S.presence[e.id];
@@ -224,41 +89,64 @@ function sanitize() {
   });
   if (!byId(S.seance.president)?.actif) S.seance.president = S.elus.find(e => e.actif)?.id ?? null;
 }
+
+/* ---------- enregistrement ---------- */
+
+/**
+ * Valide la modification de S et l'enregistre. Les enregistrements partent
+ * l'un après l'autre, car chacun a besoin de la révision renvoyée par le précédent.
+ */
 function commit({ render: shouldRender = true } = {}) {
   sanitize();
   if (shouldRender) render();
   const snapshot = JSON.parse(JSON.stringify(S));
-  setSaveStatus("serverSaving");
-  const pending = saveQueue.then(async () => {
+  saveQueue = saveQueue.then(async () => {
     if (saveError) return false;
     try {
-      const result = await API.saveState(snapshot, revision);
-      revision = result.revision;
-      if (pendingSaves > 0) pendingSaves--;
-      if (pendingSaves === 0) setSaveStatus("serverSaved");
+      revision = (await API.saveState(snapshot, revision)).revision;
       return true;
     } catch (error) {
       saveError = error;
-      pendingSaves = 0;
-      setSaveStatus("saveFailure");
-      showNotification(
-        error instanceof ApiError && error.status === 409 ? t("stateConflict") : t("saveFailure"),
-        "error",
-      );
+      renderSaveStatus();
+      showNotification(failureMessage(error), "error");
       return false;
     }
   });
-  saveQueue = pending;
-  pendingSaves++;
-  return pending;
+  return saveQueue;
 }
 
-let pendingSaves = 0;
-
-function setSaveStatus(key) {
+/** Le statut n'apparaît qu'en cas d'échec ; un enregistrement réussi reste silencieux. */
+function renderSaveStatus() {
   const status = document.getElementById("save-status");
-  if (!status) return;
-  status.textContent = key === "saveFailure" ? t(key) : "";
-  status.hidden = key !== "saveFailure";
-  status.classList.toggle("error", key === "saveFailure");
+  status.textContent = saveError ? t("saveFailure") : "";
+  status.hidden = !saveError;
+  status.classList.toggle("error", Boolean(saveError));
+}
+
+/* ---------- archives ---------- */
+let archiveInProgress = false;
+
+/** Archive la version enregistrée sur le serveur ; false si elle n'est pas à jour. */
+async function archiveCurrentSession() {
+  if (archiveInProgress) return false;
+  archiveInProgress = true;
+  try {
+    if (!await saveQueue || saveError) return false;
+    const result = await API.archive(revision);
+    revision = result.revision;
+    ARCHIVES = [...ARCHIVES.filter(item => item.id !== result.archive.id), result.archive];
+    return true;
+  } finally {
+    archiveInProgress = false;
+  }
+}
+
+/** Reprend une archive comme séance en cours, pour la corriger puis l'archiver à nouveau. */
+function restoreArchive(id) {
+  const entry = ARCHIVES.find(item => item.id === id);
+  if (!entry || !confirm(t("historyRestoreConfirm"))) return;
+  S = structuredClone(entry.snapshot);
+  openVote = null;
+  navigateToTab("votes");
+  return commit();
 }

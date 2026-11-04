@@ -40,8 +40,6 @@ function createExportContext() {
     })[key] ?? key,
     today: () => "2026-11-01",
     byId: id => members.find(member => member.id === id),
-    voteVoters: item => item.electeurs,
-    voteSession: item => ({ president: item.president }),
     choice: (item, id) => item.choix[id],
     tally: () => ({ pour: 1, contre: 1, abst: 1, npp: 0, res: "res_rejectedTie" }),
     showNotification: () => {},

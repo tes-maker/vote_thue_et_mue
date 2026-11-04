@@ -1,4 +1,6 @@
-/* ---------- traductions (français / anglais) ---------- */
+/* ---------- traductions (français / anglais), langue et thème ----------
+   Toute clé doit exister dans les deux langues. Les clés res_*, choice_* et short_*
+   sont composées à l'exécution : une recherche du nom complet ne les trouve pas. */
 const I18N = {
   fr: {
     appTitle: "Votes du conseil municipal",
@@ -7,13 +9,9 @@ const I18N = {
     loginBtn: "Se connecter",
     loginBad: "Adresse e-mail ou mot de passe incorrect.",
     loginServerUnavailable: "Le serveur est indisponible. Réessayez dans quelques instants.",
-    loginDataError: "Les données existantes ne peuvent pas être migrées. Elles n'ont pas été remplacées.",
     logoutServerError: "La déconnexion du serveur a échoué. Fermez le navigateur pour terminer la session.",
-    migrationConflict: "Une autre séance a été créée entre-temps. Les anciennes données locales n'ont pas été importées.",
-    legacyCopyRemains: "La migration est faite, mais une copie des anciennes données reste dans ce navigateur.",
     export: "Exporter les résultats (CSV)",
     exportJSON: "Exporter en JSON",
-    serverSaving: "Enregistrement sur le serveur…",
     enableDarkMode: "Activer le mode sombre",
     enableLightMode: "Activer le mode clair",
     logout: "Se déconnecter",
@@ -155,18 +153,8 @@ const I18N = {
     historyNoVotes: "Aucune délibération enregistrée pour cette séance.",
     voteDetails: "Voir les votes nominatifs",
     archiveSuccess: "Séance archivée avec succès.",
-
-    csvMembers: "Membres en exercice",
-    csvResults: "RÉSULTATS DES VOTES",
-    csvNo: "N°",
-    csvSubject: "Objet",
-    csvResult: "Résultat",
-    csvDetail: "DÉTAIL NOMINATIF",
-    csvProxyTo: "Procuration donnée à",
-    csvItem: "Délib. {n}",
     csvFile: "votes_conseil",
     jsonFile: "seance",
-    backupFile: "sauvegarde_votes_conseil",
   },
 
   en: {
@@ -176,13 +164,9 @@ const I18N = {
     loginBtn: "Sign in",
     loginBad: "Incorrect email address or password.",
     loginServerUnavailable: "The server is unavailable. Please try again shortly.",
-    loginDataError: "Existing data could not be migrated and has not been replaced.",
     logoutServerError: "Server sign-out failed. Close the browser to end the session.",
-    migrationConflict: "A session was created in the meantime. The old local data was not imported.",
-    legacyCopyRemains: "Migration completed, but a copy of the old data remains in this browser.",
     export: "Export results (CSV)",
     exportJSON: "Export JSON",
-    serverSaving: "Saving to server…",
     enableDarkMode: "Enable dark mode",
     enableLightMode: "Enable light mode",
     logout: "Sign out",
@@ -324,17 +308,8 @@ const I18N = {
     historyNoVotes: "No resolutions were recorded for this session.",
     voteDetails: "Show individual votes",
     archiveSuccess: "Session archived successfully.",
-    csvMembers: "Serving members",
-    csvResults: "VOTING RESULTS",
-    csvNo: "No.",
-    csvSubject: "Subject",
-    csvResult: "Result",
-    csvDetail: "INDIVIDUAL VOTES",
-    csvProxyTo: "Proxy given to",
-    csvItem: "Res. {n}",
     csvFile: "council_votes",
     jsonFile: "session",
-    backupFile: "council_votes_backup",
   },
 };
 
@@ -360,10 +335,8 @@ function applyStatic() {
   document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll(".lang button").forEach(b => b.classList.toggle("on", b.dataset.val === lang));
   const themeToggle = document.getElementById("theme-toggle");
-  if (themeToggle) {
-    themeToggle.textContent = t(theme === "dark" ? "enableLightMode" : "enableDarkMode");
-    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
-  }
+  themeToggle.textContent = t(theme === "dark" ? "enableLightMode" : "enableDarkMode");
+  themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
   document.querySelectorAll("img[data-dark-src]").forEach(img => {
     img.src = theme === "dark" ? img.dataset.darkSrc : img.dataset.lightSrc;
   });
@@ -381,8 +354,6 @@ function setLang(l) {
   lang = l;
   try { localStorage.setItem(LANG_KEY, l); } catch (e) {}
   applyStatic();
-  if (typeof setSaveStatus === "function") {
-    setSaveStatus(saveError ? "saveFailure" : pendingSaves ? "serverSaving" : "serverSaved");
-  }
+  renderSaveStatus();
   if (!document.body.classList.contains("locked")) render();
 }

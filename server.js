@@ -1,3 +1,10 @@
+/**
+ * Serveur HTTP : API JSON (documentée dans endpoints.md) et fichiers de l'interface.
+ *
+ * Organisation : configuration, middlewares de protection, accès à la base,
+ * puis routes dans createApp(). Une route signale une erreur attendue en levant
+ * HttpError ; Express 5 transmet les rejets au gestionnaire d'erreurs final.
+ */
 require("dotenv").config({ path: process.env.APP_ENV_FILE || ".env" });
 
 const crypto = require("node:crypto");
@@ -11,7 +18,14 @@ const session = require("express-session");
 const helmet = require("helmet");
 const { Pool } = require("pg");
 const { z } = require("zod");
+const {
+  archiveSchema,
+  loginSchema,
+  mandateInputSchema,
+  sessionSchema,
+} = require("./server/schemas");
 
+/* ---------- configuration ---------- */
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -26,212 +40,97 @@ if (process.env.API_BEARER_TOKEN && Buffer.byteLength(process.env.API_BEARER_TOK
 }
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT invalide.");
 
+const SESSION_COOKIE_NAME = isProduction ? "__Host-vote-cm" : "vote-cm.sid";
+const SESSION_COOKIE = { httpOnly: true, secure: isProduction, sameSite: "strict", path: "/" };
+const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+
+/** Comparé lorsque le compte n'existe pas, pour que la réponse prenne le même temps. */
+const UNKNOWN_USER_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.8G0kz3fg5hQbQ6Hb0EkmBHv6GZG2fCW";
+/** Sérialise les écritures du mandat : voir la route PUT /mandate. */
+const MANDATE_LOCK_ID = 948377;
+
+/** Adresses des onglets, servies par la même page (voir js/render.js). */
+const TAB_ROUTES = new Set(["presence", "votes", "confidential", "elus", "history"]);
+/** Seuls ces fichiers de la racine sont publics : .env et le code serveur ne doivent jamais l'être. */
+const PUBLIC_FILES = new Set([
+  "style.css", "logo_thue_et_mue.png", "logo_thue_et_mue.svg",
+  "logo_thue_et_mue_dark.svg", "rf_logo.svg", "rf_logo_dark.svg",
+]);
+
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 pool.on("error", error => console.error("Erreur de connexion PostgreSQL :", error));
 const PgSessionStore = connectPgSimple(session);
-const idSchema = z.string().regex(/^[a-z0-9]+$/).max(64);
-const memberSchema = z.object({
-  id: idSchema,
-  nom: z.string().max(255),
-  fonction: z.string().max(500),
-  actif: z.boolean().default(true),
-});
-const attendanceSchema = z.object({
-  present: z.boolean(),
-  mandataire: idSchema.nullable(),
-});
-const voterSchema = memberSchema.extend({
-  present: z.boolean(),
-  mandataire: idSchema.nullable(),
-});
-const voteSchema = z.object({
-  id: idSchema,
-  numero: z.string().max(50),
-  objet: z.string().max(5000),
-  choix: z.record(idSchema, z.enum(["pour", "contre", "abst", "npp"])),
-  electeurs: z.array(voterSchema).max(200),
-  president: idSchema.nullable(),
-});
-const confidentialOptionSchema = z.object({
-  id: idSchema,
-  nom: z.string().trim().min(1).max(255),
-  voix: z.number().int().min(0).max(200),
-});
-const confidentialVoteSchema = z.object({
-  id: idSchema,
-  numero: z.string().max(50),
-  objet: z.string().max(5000),
-  limite: z.number().int().min(0).max(200),
-  options: z.array(confidentialOptionSchema).max(200).optional(),
-  structures: z.array(confidentialOptionSchema).max(200).optional(),
-  abstentions: z.number().int().min(0).max(200),
-  npp: z.number().int().min(0).max(200),
-}).superRefine((vote, context) => {
-  if (vote.options && vote.structures) {
-    context.addIssue({ code: "custom", message: "Le vote confidentiel ne peut définir options et structures simultanément." });
-  }
-  const options = vote.options ?? vote.structures ?? [];
-  const optionIds = new Set(options.map(option => option.id));
-  if (optionIds.size !== options.length) {
-    context.addIssue({ code: "custom", message: "Une option est présente plusieurs fois dans le vote confidentiel." });
-  }
-  const total = options.reduce((sum, option) => sum + option.voix, vote.abstentions + vote.npp);
-  if (total > vote.limite) {
-    context.addIssue({ code: "custom", message: "Le nombre de bulletins dépasse le nombre d'élus autorisés." });
-  }
-}).transform(({ structures, ...vote }) => ({
-  ...vote,
-  options: vote.options ?? structures ?? [],
-}));
-const sessionSchema = z.object({
-  elus: z.array(memberSchema).max(200),
-  seance: z.object({
-    id: idSchema,
-    titre: z.string().max(255),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    president: idSchema.nullable(),
-  }),
-  presence: z.record(idSchema, attendanceSchema),
-  votes: z.array(voteSchema).max(2000),
-  votesConfidentiels: z.array(confidentialVoteSchema).max(2000).default([]),
-}).superRefine((state, context) => {
-  const memberIds = new Set(state.elus.map(member => member.id));
-  const membersById = new Map(state.elus.map(member => [member.id, member]));
-  if (memberIds.size !== state.elus.length) {
-    context.addIssue({ code: "custom", message: "La liste contient des identifiants d'élus en double." });
-  }
-  if (state.seance.president && !membersById.get(state.seance.president)?.actif) {
-    context.addIssue({ code: "custom", message: "Le président doit être en exercice." });
-  }
-  if (Object.keys(state.presence).length !== memberIds.size
-    || state.elus.some(member => !Object.hasOwn(state.presence, member.id))) {
-    context.addIssue({ code: "custom", message: "Les présences ne correspondent pas à la liste des élus." });
-  }
-  for (const member of state.elus) {
-    const attendance = state.presence[member.id];
-    if (!member.actif && (attendance.present || attendance.mandataire)) {
-      context.addIssue({ code: "custom", message: "Un membre démissionnaire ne peut pas participer à la séance." });
-    }
-    if (attendance.mandataire
-      && (!member.actif || attendance.present || !membersById.get(attendance.mandataire)?.actif
-        || !state.presence[attendance.mandataire]?.present)) {
-      context.addIssue({ code: "custom", message: "Une procuration doit être portée par un élu présent." });
-    }
-  }
-  const parsedDate = Date.parse(`${state.seance.date}T00:00:00Z`);
-  if (!Number.isFinite(parsedDate) || new Date(parsedDate).toISOString().slice(0, 10) !== state.seance.date) {
-    context.addIssue({ code: "custom", message: "La date de séance est invalide." });
-  }
-  const voteIds = new Set();
-  for (const vote of state.votes) {
-    if (voteIds.has(vote.id)) context.addIssue({ code: "custom", message: "La liste contient des votes en double." });
-    voteIds.add(vote.id);
-    const voterIds = new Set(vote.electeurs.map(voter => voter.id));
-    if (voterIds.size !== vote.electeurs.length) {
-      context.addIssue({ code: "custom", message: "Un vote contient des électeurs en double." });
-    }
-    const electorate = new Map(vote.electeurs.map(voter => [voter.id, voter]));
-    for (const voter of vote.electeurs) {
-      if (voter.mandataire
-        && (voter.present || !electorate.get(voter.mandataire)?.present)) {
-        context.addIssue({ code: "custom", message: "Une procuration de vote doit être portée par un élu présent." });
-      }
-    }
-    if (Object.keys(vote.choix).some(id => !voterIds.has(id))) {
-      context.addIssue({ code: "custom", message: "Un choix de vote ne correspond à aucun électeur." });
-    }
-  }
-  const confidentialVoteIds = new Set();
-  for (const vote of state.votesConfidentiels) {
-    if (confidentialVoteIds.has(vote.id)) {
-      context.addIssue({ code: "custom", message: "La liste contient des votes confidentiels en double." });
-    }
-    confidentialVoteIds.add(vote.id);
-  }
-});
-const archiveSchema = z.object({
-  id: idSchema,
-  archivedAt: z.string().datetime(),
-  snapshot: sessionSchema,
-}).superRefine((archive, context) => {
-  if (archive.id !== archive.snapshot.seance.id) {
-    context.addIssue({ code: "custom", message: "L'identifiant de l'archive ne correspond pas à la séance." });
-  }
-});
-const mandateSchema = z.object({
-  startYear: z.number().int().min(1900).max(9999),
-  endYear: z.number().int().min(1900).max(9999),
-}).refine(mandate => mandate.endYear > mandate.startYear, {
-  message: "L'année de fin doit être supérieure à l'année de début.",
-});
-const mandateInputSchema = mandateSchema.safeExtend({
-  mode: z.enum(["create", "edit"]),
-});
 
-function sendError(res, status, code) {
-  return res.status(status).json({ error: code });
+/* ---------- erreurs et validation ---------- */
+
+/** Erreur attendue, renvoyée au client sous la forme `{ "error": code }`. */
+class HttpError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
 }
 
-function validate(schema, value, res) {
+function parse(schema, value) {
   const result = schema.safeParse(value);
-  if (!result.success) {
-    sendError(res, 400, "invalid_data");
-    return null;
-  }
+  if (!result.success) throw new HttpError(400, "invalid_data");
   return result.data;
 }
 
-function requireAuth(req, res, next) {
-  if (isValidApiToken(req.get("Authorization"), process.env.API_BEARER_TOKEN)) {
-    req.apiAuthenticated = true;
-    req.authUserId = null;
-    return next();
-  }
-  return requireSessionAuth(req, res, next);
-}
+/* ---------- protections des routes ---------- */
 
-function requireSessionAuth(req, res, next) {
-  if (req.session?.userId) {
-    req.authUserId = req.session.userId;
-    return next();
-  }
-  return sendError(res, 401, "unauthorized");
+/** Comparaison en temps constant, pour ne pas révéler un secret par le temps de réponse. */
+function safeEqual(a, b) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function isValidApiToken(authorization, expectedToken) {
   const match = /^Bearer ([^\s]+)$/i.exec(authorization ?? "");
-  if (!expectedToken || !match) return false;
-  const provided = Buffer.from(match[1]);
-  const expected = Buffer.from(expectedToken);
-  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  return Boolean(expectedToken && match) && safeEqual(match[1], expectedToken);
 }
 
-function requireCsrf(req, res, next) {
-  if (req.apiAuthenticated) return next();
-  const token = req.get("X-CSRF-Token");
-  const provided = Buffer.from(token ?? "");
-  const expected = Buffer.from(req.session.csrfToken ?? "");
-  if (!token || !req.session.csrfToken || provided.length !== expected.length
-    || !crypto.timingSafeEqual(provided, expected)) {
-    return sendError(res, 403, "csrf_invalid");
-  }
+function requireSession(req, _res, next) {
+  if (!req.session?.userId) throw new HttpError(401, "unauthorized");
+  req.authUserId = req.session.userId;
   next();
 }
 
-function expectedRevision(req, res) {
-  const raw = req.get("If-Match")?.replace(/^"|"$/g, "");
-  if (raw === undefined || !/^\d+$/.test(raw)) {
-    sendError(res, 428, "revision_required");
-    return null;
+/** Accepte le jeton bearer des intégrations ou, à défaut, une session. */
+function requireAuth(req, res, next) {
+  if (!isValidApiToken(req.get("Authorization"), process.env.API_BEARER_TOKEN)) {
+    return requireSession(req, res, next);
   }
-  const revision = Number(raw);
-  if (!Number.isSafeInteger(revision)) {
-    sendError(res, 400, "invalid_revision");
-    return null;
-  }
-  return revision;
+  req.apiAuthenticated = true;
+  req.authUserId = null;
+  next();
 }
 
+/** Le jeton CSRF ne concerne que les sessions : un cookie part tout seul, pas un jeton bearer. */
+function requireCsrf(req, _res, next) {
+  const token = req.get("X-CSRF-Token");
+  const valid = token && req.session.csrfToken && safeEqual(token, req.session.csrfToken);
+  if (!req.apiAuthenticated && !valid) throw new HttpError(403, "csrf_invalid");
+  next();
+}
+
+/** Lit dans If-Match la révision connue du client (verrouillage optimiste). */
+function requireRevision(req, _res, next) {
+  const raw = req.get("If-Match")?.replace(/^"|"$/g, "") ?? "";
+  if (!/^\d+$/.test(raw)) throw new HttpError(428, "revision_required");
+  req.expectedRevision = Number(raw);
+  if (!Number.isSafeInteger(req.expectedRevision)) throw new HttpError(400, "invalid_revision");
+  next();
+}
+
+/** Protections de toute route d'écriture du registre. */
+const guardedWrite = [requireAuth, requireCsrf, requireRevision];
+
+/* ---------- accès à la base ---------- */
+
+/** Exécute callback dans une transaction, annulée si une erreur est levée. */
 async function transaction(callback) {
   const client = await pool.connect();
   try {
@@ -247,35 +146,64 @@ async function transaction(callback) {
   }
 }
 
-async function checkRevision(client, revision) {
-  const result = await client.query("SELECT revision FROM app_state WHERE id = 1 FOR UPDATE");
-  const actual = result.rows[0] ? Number(result.rows[0].revision) : 0;
-  if (actual !== revision) return null;
-  return actual;
+function audit(client, userId, action) {
+  return client.query("INSERT INTO audit_log (user_id, action) VALUES ($1, $2)", [userId, action]);
 }
 
-async function storeState(client, active, userId, revision, action = "state.updated") {
-  const nextRevision = revision + 1;
+/**
+ * Enregistre la séance active si la révision attendue est toujours la bonne et
+ * renvoie la nouvelle révision. La révision 0 désigne une base encore vide.
+ * La condition est portée par la requête elle-même : de deux écritures
+ * concurrentes sur la même révision, une seule modifie une ligne.
+ */
+async function saveActiveState(client, active, userId, revision, action = "state.updated") {
+  const payload = JSON.stringify(active);
   const result = revision === 0
     ? await client.query(
         `INSERT INTO app_state (id, payload, revision, updated_by)
          VALUES (1, $1::jsonb, 1, $2)
          ON CONFLICT (id) DO NOTHING RETURNING revision`,
-        [JSON.stringify(active), userId],
+        [payload, userId],
       )
     : await client.query(
-        `UPDATE app_state SET payload = $1::jsonb, revision = $2,
-          updated_at = NOW(), updated_by = $3
-         WHERE id = 1 AND revision = $4 RETURNING revision`,
-        [JSON.stringify(active), nextRevision, userId, revision],
+        `UPDATE app_state SET payload = $1::jsonb, revision = revision + 1,
+           updated_at = NOW(), updated_by = $2
+         WHERE id = 1 AND revision = $3 RETURNING revision`,
+        [payload, userId, revision],
       );
-  if (!result.rows[0]) return null;
-  await client.query(
-    "INSERT INTO audit_log (user_id, action) VALUES ($1, $2)",
-    [userId, action],
-  );
+  if (!result.rows[0]) throw new HttpError(409, "state_conflict");
+  await audit(client, userId, action);
   return Number(result.rows[0].revision);
 }
+
+/** Une séance n'a qu'une archive : archiver à nouveau remplace la précédente. */
+function saveArchive(client, { id, archivedAt, snapshot }, userId) {
+  return client.query(
+    `INSERT INTO session_archives (session_id, archived_at, snapshot, archived_by)
+     VALUES ($1, $2, $3::jsonb, $4)
+     ON CONFLICT (session_id) DO UPDATE
+     SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
+         archived_by = EXCLUDED.archived_by`,
+    [id, archivedAt, JSON.stringify(snapshot), userId],
+  );
+}
+
+function mandateResponse(row) {
+  return {
+    mandate: { id: String(row.id), startYear: row.start_year, endYear: row.end_year },
+    revision: Number(row.revision),
+  };
+}
+
+/* ---------- application ---------- */
+
+/** Toute route publique existe avec et sans préfixe de version. */
+const versioned = route => [`/api${route}`, `/api/v1${route}`];
+
+/** Version « promesse » de session.regenerate, session.save et session.destroy. */
+const sessionCall = (req, method) => new Promise((resolve, reject) => {
+  req.session[method](error => (error ? reject(error) : resolve()));
+});
 
 function createApp() {
   const app = express();
@@ -287,7 +215,7 @@ function createApp() {
         defaultSrc: ["'self'"],
         baseUri: ["'self'"],
         connectSrc: ["'self'"],
-        fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
+        fontSrc: ["'self'", "https://cdn.jsdelivr.net"], // police Marianne, voir style.css
         formAction: ["'self'"],
         frameAncestors: ["'none'"],
         imgSrc: ["'self'", "data:"],
@@ -298,20 +226,17 @@ function createApp() {
     },
   }));
   app.use(express.json({ limit: "10mb", type: "application/json" }));
+  app.use((error, _req, _res, next) => {
+    next(error.type === "entity.parse.failed" ? new HttpError(400, "invalid_data") : error);
+  });
   app.use(session({
-    name: isProduction ? "__Host-vote-cm" : "vote-cm.sid",
+    name: SESSION_COOKIE_NAME,
     secret: process.env.SESSION_SECRET,
     store: new PgSessionStore({ pool, createTableIfMissing: true, tableName: "user_sessions" }),
     resave: false,
     saveUninitialized: false,
     rolling: true,
-    cookie: {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: "strict",
-      path: "/",
-      maxAge: 8 * 60 * 60 * 1000,
-    },
+    cookie: { ...SESSION_COOKIE, maxAge: SESSION_MAX_AGE_MS },
   }));
 
   const loginLimiter = rateLimit({
@@ -321,286 +246,177 @@ function createApp() {
     legacyHeaders: false,
   });
 
-  app.get(["/api/health", "/api/v1/health"], async (_req, res, next) => {
-    try {
-      await pool.query("SELECT 1");
-      res.json({ status: "ok" });
-    } catch (error) {
-      next(error);
-    }
+  /* ----- santé et authentification ----- */
+
+  app.get(versioned("/health"), async (_req, res) => {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok" });
   });
 
-  app.post("/api/auth/login", loginLimiter, async (req, res, next) => {
-    try {
-      const input = validate(z.object({
-        email: z.string().email().max(255),
-        password: z.string().min(1).max(72),
-      }), req.body, res);
-      if (!input) return;
-      if (Buffer.byteLength(input.password, "utf8") > 72) return sendError(res, 400, "invalid_credentials");
-      const result = await pool.query(
-        "SELECT id, email, password_hash FROM app_users WHERE email = $1",
-        [input.email.trim().toLowerCase()],
-      );
-      const user = result.rows[0];
-      const valid = user
-        ? await bcrypt.compare(input.password, user.password_hash)
-        : await bcrypt.compare(input.password, "$2a$12$C6UzMDM.H6dfI/f/IKcEe.8G0kz3fg5hQbQ6Hb0EkmBHv6GZG2fCW");
-      if (!user || !valid) return sendError(res, 401, "invalid_credentials");
+  app.post("/api/auth/login", loginLimiter, async (req, res) => {
+    const { email, password } = parse(loginSchema, req.body);
+    // bcrypt ignore ce qui dépasse 72 octets, or zod compte ici des caractères.
+    if (Buffer.byteLength(password, "utf8") > 72) throw new HttpError(400, "invalid_credentials");
+    const result = await pool.query(
+      "SELECT id, email, password_hash FROM app_users WHERE email = $1",
+      [email.trim().toLowerCase()],
+    );
+    const user = result.rows[0];
+    const valid = await bcrypt.compare(password, user?.password_hash ?? UNKNOWN_USER_HASH);
+    if (!user || !valid) throw new HttpError(401, "invalid_credentials");
 
-      req.session.regenerate(error => {
-        if (error) return next(error);
-        req.session.userId = user.id;
-        req.session.userEmail = user.email;
-        req.session.csrfToken = crypto.randomBytes(32).toString("hex");
-        req.session.save(saveError => {
-          if (saveError) return next(saveError);
-          res.json({ user: { email: user.email }, csrfToken: req.session.csrfToken });
-        });
-      });
-    } catch (error) {
-      next(error);
-    }
+    // Nouvel identifiant de session à la connexion, contre la fixation de session.
+    await sessionCall(req, "regenerate");
+    req.session.userId = user.id;
+    req.session.userEmail = user.email;
+    req.session.csrfToken = crypto.randomBytes(32).toString("hex");
+    await sessionCall(req, "save");
+    res.json({ user: { email: user.email }, csrfToken: req.session.csrfToken });
   });
 
   app.get("/api/auth/me", (req, res) => {
     if (!req.session.userId) return res.json({ user: null });
-    if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString("hex");
     res.json({ user: { email: req.session.userEmail }, csrfToken: req.session.csrfToken });
   });
 
-  app.post("/api/auth/logout", requireSessionAuth, requireCsrf, (req, res, next) => {
-    req.session.destroy(error => {
-      if (error) return next(error);
-      res.clearCookie(isProduction ? "__Host-vote-cm" : "vote-cm.sid", {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: "strict",
-        path: "/",
-      });
-      res.status(204).end();
+  app.post("/api/auth/logout", requireSession, requireCsrf, async (req, res) => {
+    await sessionCall(req, "destroy");
+    res.clearCookie(SESSION_COOKIE_NAME, SESSION_COOKIE);
+    res.status(204).end();
+  });
+
+  /* ----- mandat ----- */
+
+  app.get(versioned("/mandate"), requireAuth, async (_req, res) => {
+    const result = await pool.query(
+      "SELECT id, start_year, end_year, revision FROM mandate_periods WHERE is_current = TRUE",
+    );
+    if (!result.rows[0]) throw new Error("Aucun mandat courant n'est configuré.");
+    res.json(mandateResponse(result.rows[0]));
+  });
+
+  app.put(versioned("/mandate"), guardedWrite, async (req, res) => {
+    const { mode, startYear, endYear } = parse(mandateInputSchema, req.body);
+    const nextRevision = req.expectedRevision + 1;
+    const body = await transaction(async client => {
+      // Verrou global plutôt que FOR UPDATE : une création retire à la ligne son
+      // statut courant, et une requête concurrente en attente ne la retrouverait plus.
+      await client.query("SELECT pg_advisory_xact_lock($1)", [MANDATE_LOCK_ID]);
+      const current = (await client.query(
+        "SELECT id, revision FROM mandate_periods WHERE is_current = TRUE",
+      )).rows[0];
+      if (!current) throw new Error("Aucun mandat courant n'est configuré.");
+      if (Number(current.revision) !== req.expectedRevision) throw new HttpError(409, "mandate_conflict");
+
+      let saved;
+      if (mode === "create") {
+        await client.query("UPDATE mandate_periods SET is_current = FALSE WHERE id = $1", [current.id]);
+        saved = await client.query(
+          `INSERT INTO mandate_periods (start_year, end_year, revision, updated_by)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, start_year, end_year, revision`,
+          [startYear, endYear, nextRevision, req.authUserId],
+        );
+      } else {
+        saved = await client.query(
+          `UPDATE mandate_periods
+           SET start_year = $1, end_year = $2, revision = $3, updated_by = $4
+           WHERE id = $5
+           RETURNING id, start_year, end_year, revision`,
+          [startYear, endYear, nextRevision, req.authUserId, current.id],
+        );
+      }
+      await audit(client, req.authUserId, mode === "create" ? "mandate.created" : "mandate.updated");
+      return mandateResponse(saved.rows[0]);
+    });
+    res.json(body);
+  });
+
+  /* ----- séance active et archives ----- */
+
+  app.get(versioned("/state"), requireAuth, async (_req, res) => {
+    const { rows: [row] } = await pool.query(
+      `SELECT
+        (SELECT payload FROM app_state WHERE id = 1) AS active,
+        COALESCE((SELECT revision FROM app_state WHERE id = 1), 0) AS revision,
+        COALESCE((
+          SELECT jsonb_agg(
+            jsonb_build_object('id', session_id, 'archivedAt', archived_at, 'snapshot', snapshot)
+            ORDER BY archived_at DESC
+          )
+          FROM session_archives
+        ), '[]'::jsonb) AS history`,
+    );
+    // Relire avec le schéma met aussi les anciennes données au format actuel.
+    res.json({
+      active: row.active === null ? null : sessionSchema.parse(row.active),
+      history: row.history.map(archive => ({ ...archive, snapshot: sessionSchema.parse(archive.snapshot) })),
+      revision: Number(row.revision),
     });
   });
 
-  app.get(["/api/state", "/api/v1/state"], requireAuth, async (req, res, next) => {
-    try {
-      const result = await pool.query(
-        `SELECT
-          (SELECT payload FROM app_state WHERE id = 1) AS active,
-          COALESCE((SELECT revision FROM app_state WHERE id = 1), 0) AS revision,
-          COALESCE((
-            SELECT jsonb_agg(
-              jsonb_build_object('id', session_id, 'archivedAt', archived_at, 'snapshot', snapshot)
-              ORDER BY archived_at DESC
-            )
-            FROM session_archives
-          ), '[]'::jsonb) AS history`,
+  app.put(versioned("/state"), guardedWrite, async (req, res) => {
+    const active = parse(sessionSchema, req.body?.active);
+    const revision = await transaction(client => (
+      saveActiveState(client, active, req.authUserId, req.expectedRevision)
+    ));
+    res.json({ revision });
+  });
+
+  app.post(versioned("/archive"), guardedWrite, async (req, res) => {
+    const body = await transaction(async client => {
+      // Verrou conservé jusqu'au COMMIT : la séance archivée est celle de cette révision.
+      const { rows: [row] } = await client.query("SELECT payload, revision FROM app_state WHERE id = 1 FOR UPDATE");
+      if (Number(row?.revision) !== req.expectedRevision) throw new HttpError(409, "state_conflict");
+      const snapshot = parse(sessionSchema, row.payload);
+      const archive = { id: snapshot.seance.id, archivedAt: new Date().toISOString(), snapshot };
+      await saveArchive(client, archive, req.authUserId);
+      const nextRevision = req.expectedRevision + 1;
+      await client.query(
+        "UPDATE app_state SET revision = $1, updated_at = NOW(), updated_by = $2 WHERE id = 1",
+        [nextRevision, req.authUserId],
       );
-      const row = result.rows[0];
-      const active = row.active === null ? null : sessionSchema.parse(row.active);
-      res.json({
-        active,
-        history: row.history.map(archive => ({
-          ...archive,
-          snapshot: sessionSchema.parse(archive.snapshot),
-        })),
-        revision: Number(row.revision),
-      });
-    } catch (error) {
-      next(error);
-    }
+      await audit(client, req.authUserId, "session.archived");
+      return { archive, revision: nextRevision };
+    });
+    res.json(body);
   });
 
-  app.get(["/api/mandate", "/api/v1/mandate"], requireAuth, async (_req, res, next) => {
-    try {
-      const result = await pool.query(
-        `SELECT id, start_year, end_year, revision
-         FROM mandate_periods WHERE is_current = TRUE`,
-      );
-      const row = result.rows[0];
-      if (!row) throw new Error("Aucun mandat courant n'est configuré.");
-      res.json({
-        mandate: { id: String(row.id), startYear: row.start_year, endYear: row.end_year },
-        revision: Number(row.revision),
-      });
-    } catch (error) {
-      next(error);
-    }
+  app.put(versioned("/state/import"), guardedWrite, async (req, res) => {
+    const active = parse(sessionSchema, req.body?.active);
+    const history = parse(z.array(archiveSchema).max(5000), req.body?.history);
+    const revision = await transaction(async client => {
+      const next = await saveActiveState(client, active, req.authUserId, req.expectedRevision, "state.imported");
+      for (const archive of history) await saveArchive(client, archive, req.authUserId);
+      return next;
+    });
+    res.json({ revision });
   });
 
-  app.put(["/api/mandate", "/api/v1/mandate"], requireAuth, requireCsrf, async (req, res, next) => {
-    const revision = expectedRevision(req, res);
-    if (revision === null) return;
-    const input = validate(mandateInputSchema, req.body, res);
-    if (!input) return;
-    try {
-      const result = await transaction(async client => {
-        await client.query("SELECT pg_advisory_xact_lock(948377)");
-        const currentResult = await client.query(
-          `SELECT id, revision FROM mandate_periods
-           WHERE is_current = TRUE FOR UPDATE`,
-        );
-        const current = currentResult.rows[0];
-        if (!current) throw new Error("Aucun mandat courant n'est configuré.");
-        if (Number(current.revision) !== revision) return null;
+  /* ----- interface web et cas restants ----- */
 
-        const nextRevision = revision + 1;
-        let mandateResult;
-        if (input.mode === "create") {
-          await client.query("UPDATE mandate_periods SET is_current = FALSE WHERE id = $1", [current.id]);
-          mandateResult = await client.query(
-            `INSERT INTO mandate_periods (start_year, end_year, revision, updated_by)
-             VALUES ($1, $2, $3, $4)
-             RETURNING id, start_year, end_year, revision`,
-            [input.startYear, input.endYear, nextRevision, req.authUserId],
-          );
-        } else {
-          mandateResult = await client.query(
-            `UPDATE mandate_periods
-             SET start_year = $1, end_year = $2, revision = $3, updated_by = $4
-             WHERE id = $5
-             RETURNING id, start_year, end_year, revision`,
-            [input.startYear, input.endYear, nextRevision, req.authUserId, current.id],
-          );
-        }
-        await client.query(
-          "INSERT INTO audit_log (user_id, action) VALUES ($1, $2)",
-          [req.authUserId, input.mode === "create" ? "mandate.created" : "mandate.updated"],
-        );
-        const row = mandateResult.rows[0];
-        return {
-          mandate: { id: String(row.id), startYear: row.start_year, endYear: row.end_year },
-          revision: Number(row.revision),
-        };
-      });
-      if (result === null) return sendError(res, 409, "mandate_conflict");
-      res.json(result);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.put(["/api/state", "/api/v1/state"], requireAuth, requireCsrf, async (req, res, next) => {
-    const revision = expectedRevision(req, res);
-    if (revision === null) return;
-    const active = validate(sessionSchema, req.body?.active, res);
-    if (!active) return;
-    try {
-      const result = await transaction(async client => {
-        const actual = await checkRevision(client, revision);
-        if (actual === null) return null;
-        return storeState(client, active, req.authUserId, actual);
-      });
-      if (result === null) return sendError(res, 409, "state_conflict");
-      res.json({ revision: result });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post(["/api/archive", "/api/v1/archive"], requireAuth, requireCsrf, async (req, res, next) => {
-    const revision = expectedRevision(req, res);
-    if (revision === null) return;
-    try {
-      const result = await transaction(async client => {
-        const stateResult = await client.query("SELECT payload, revision FROM app_state WHERE id = 1 FOR UPDATE");
-        const row = stateResult.rows[0];
-        if (!row || Number(row.revision) !== revision) return null;
-        const snapshot = validate(sessionSchema, row.payload, res);
-        if (!snapshot) return false;
-        const archive = {
-          id: snapshot.seance.id,
-          archivedAt: new Date().toISOString(),
-          snapshot,
-        };
-        await client.query(
-          `INSERT INTO session_archives (session_id, archived_at, snapshot, archived_by)
-           VALUES ($1, $2, $3::jsonb, $4)
-           ON CONFLICT (session_id) DO UPDATE
-           SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
-               archived_by = EXCLUDED.archived_by`,
-          [archive.id, archive.archivedAt, JSON.stringify(snapshot), req.authUserId],
-        );
-        const nextRevision = revision + 1;
-        await client.query(
-          "UPDATE app_state SET revision = $1, updated_at = NOW(), updated_by = $2 WHERE id = 1",
-          [nextRevision, req.authUserId],
-        );
-        await client.query(
-          "INSERT INTO audit_log (user_id, action) VALUES ($1, 'session.archived')",
-          [req.authUserId],
-        );
-        return { archive, revision: nextRevision };
-      });
-      if (result === null) return sendError(res, 409, "state_conflict");
-      if (result === false) return;
-      res.json(result);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.put(["/api/state/import", "/api/v1/state/import"], requireAuth, requireCsrf, async (req, res, next) => {
-    const revision = expectedRevision(req, res);
-    if (revision === null) return;
-    const active = validate(sessionSchema, req.body?.active, res);
-    if (!active) return;
-    const history = validate(z.array(archiveSchema).max(5000), req.body?.history, res);
-    if (!history) return;
-    try {
-      const result = await transaction(async client => {
-        const actual = await checkRevision(client, revision);
-        if (actual === null) return null;
-        const nextRevision = await storeState(client, active, req.authUserId, actual, "state.imported");
-        if (nextRevision === null) return null;
-        for (const archive of history) {
-          await client.query(
-            `INSERT INTO session_archives (session_id, archived_at, snapshot, archived_by)
-             VALUES ($1, $2, $3::jsonb, $4)
-             ON CONFLICT (session_id) DO UPDATE
-             SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
-                 archived_by = EXCLUDED.archived_by`,
-            [archive.id, archive.archivedAt, JSON.stringify(archive.snapshot), req.authUserId],
-          );
-        }
-        return nextRevision;
-      });
-      if (result === null) return sendError(res, 409, "state_conflict");
-      res.json({ revision: result });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  const tabRoutes = new Set(["presence", "votes", "confidential", "elus", "history"]);
-  app.get("/", (_req, res) => res.sendFile(path.join(ROOT, "index.html")));
-  app.get("/:tab", (req, res, next) => {
-    if (!tabRoutes.has(req.params.tab)) return next();
-    res.sendFile(path.join(ROOT, "index.html"));
-  });
-  const publicFiles = new Set([
-    "style.css", "logo_eu.png", "logo_thue_et_mue.png",
-    "logo_thue_et_mue.svg", "logo_thue_et_mue_dark.svg",
-    "rf_logo.svg", "rf_logo_dark.svg", "image.png",
-  ]);
-  app.get("/:file", (req, res, next) => {
-    if (!publicFiles.has(req.params.file)) return next();
-    res.sendFile(path.join(ROOT, req.params.file));
+  const sendIndex = (_req, res) => res.sendFile(path.join(ROOT, "index.html"));
+  app.get("/", sendIndex);
+  app.get("/:name", (req, res, next) => {
+    if (TAB_ROUTES.has(req.params.name)) return sendIndex(req, res);
+    if (PUBLIC_FILES.has(req.params.name)) return res.sendFile(path.join(ROOT, req.params.name));
+    next();
   });
   app.use("/js", express.static(path.join(ROOT, "js"), { dotfiles: "deny", index: false, maxAge: 0 }));
-  app.use("/api", (_req, res) => sendError(res, 404, "not_found"));
+  app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
   app.use((_req, res) => res.status(404).send("Introuvable"));
   app.use((error, _req, res, _next) => {
-    console.error("Erreur serveur :", error);
+    if (!(error instanceof HttpError)) console.error("Erreur serveur :", error);
     if (res.headersSent) return;
-    sendError(res, 500, "server_error");
+    res.status(error instanceof HttpError ? error.status : 500)
+      .json({ error: error instanceof HttpError ? error.code : "server_error" });
   });
   return app;
 }
 
+/** Applique le schéma (idempotent), puis démarre le serveur jusqu'à SIGTERM ou SIGINT. */
 async function main() {
-  const migration = await fs.readFile(path.join(ROOT, "server/schema.sql"), "utf8");
-  await pool.query(migration);
+  await pool.query(await fs.readFile(path.join(ROOT, "server/schema.sql"), "utf8"));
   const server = createApp().listen(PORT, HOST, () => {
     console.log(`Application disponible sur http://${HOST}:${PORT}`);
   });
@@ -619,14 +435,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = {
-  createApp,
-  sessionSchema,
-  archiveSchema,
-  confidentialVoteSchema,
-  mandateSchema,
-  mandateInputSchema,
-  isValidApiToken,
-  requireAuth,
-  requireCsrf,
-};
+module.exports = { createApp, isValidApiToken };

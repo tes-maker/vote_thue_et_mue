@@ -7,6 +7,7 @@ const test = require("node:test");
 test("renders named anonymous options with abstention and non-participation counters", () => {
   const section = { innerHTML: "" };
   const context = {
+    window: { location: { pathname: "/" }, addEventListener() {} },
     S: {
       elus: [{ id: "member1", nom: "Identité confidentielle", actif: true }],
       votes: [],
@@ -64,6 +65,7 @@ test("refreshes only the changed confidential ballot counters", () => {
     querySelectorAll: selector => selector === "[data-confidential-count]" ? countCells : buttons,
   };
   const context = {
+    window: { location: { pathname: "/" }, addEventListener() {} },
     document: { querySelectorAll: () => [card] },
     t: (key, params) => `${params.total}/${params.limite}`,
   };
@@ -115,6 +117,7 @@ test("increments a confidential counter without rerendering or submitting the pa
     npp: 0,
   };
   const context = {
+    window: { location: { pathname: "/" }, addEventListener() {} },
     S: { votesConfidentiels: [vote] },
     saveError: null,
     document: {
@@ -128,13 +131,10 @@ test("increments a confidential counter without rerendering or submitting the pa
     setTimeout() {},
     render: () => { renderCount++; },
     commit: options => { commitOptions = options; },
-    setSaveStatus() {},
     t: (key, params = {}) => key === "confidentialLimit"
       ? `${params.total}/${params.limite}`
       : key,
     showNotification() {},
-    handleActionError(error) { throw error; },
-    ApiError: class ApiError extends Error {},
     console,
   };
   vm.runInNewContext(
@@ -221,6 +221,7 @@ test("toggles and persists the theme, with translations for both languages", () 
       querySelectorAll: selector => selector === "img[data-dark-src]" ? logos : [],
       getElementById: id => id === "theme-toggle" ? themeToggle : null,
     },
+    renderSaveStatus() {},
   };
   vm.runInNewContext(
     fs.readFileSync(path.join(__dirname, "../js/i18n.js"), "utf8"),

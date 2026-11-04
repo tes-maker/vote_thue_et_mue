@@ -1,4 +1,5 @@
-// Liste d'origine des élus : [nom, fonction]
+/* ---------- données de référence ---------- */
+// Liste d'origine des élus, utilisée à la création du registre : [nom, fonction]
 const DEFAULT_ELUS = [
   ["Michel LAFONT", "Maire de Thue et Mue"],
   ["Laurence TROLET", "1ère Maire déléguée de Bretteville-l'Orgueilleuse et maire adjointe à l'urbanisme"],
@@ -36,7 +37,3 @@ const DEFAULT_ELUS = [
 ];
 // Choix de vote possibles (libellés dans i18n.js)
 const CHOIX = ["pour", "contre", "abst", "npp"];
-
-// Clés historiques utilisées uniquement pour migrer les anciennes données du navigateur
-const KEY = "vote-cm-v1";
-const HISTORY_KEY = "vote-cm-history-v1";

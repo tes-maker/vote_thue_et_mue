@@ -50,8 +50,6 @@ test("shows archived vote titles read-only until the session is resumed", () => 
       historyRestore: "Restaurer",
     })[key] ?? key,
     fmtDate: value => value,
-    voteVoters: vote => vote.electeurs,
-    voteSession: () => ({}),
     tally: () => ({ ok: true, res: "res_adopted", votants: 1, pour: 1, contre: 0, abst: 0, npp: 0 }),
     choice: () => "pour",
   };
@@ -69,6 +67,7 @@ test("shows archived vote titles read-only until the session is resumed", () => 
 
 test("offers title editing for active nominal and confidential votes", () => {
   const context = vm.createContext({
+    window: { location: { pathname: "/" }, addEventListener() {} },
     editingVoteTitle: null,
     esc: value => String(value),
     attrs: values => Object.entries(values).map(([key, value]) => `data-${key}="${value}"`).join(" "),

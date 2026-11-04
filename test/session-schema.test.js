@@ -1,9 +1,6 @@
-process.env.DATABASE_URL ??= "postgresql://test:test@127.0.0.1:5432/test";
-process.env.SESSION_SECRET ??= "test-session-secret-with-at-least-thirty-two-characters";
-
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { archiveSchema, mandateInputSchema, mandateSchema, sessionSchema } = require("../server");
+const { archiveSchema, mandateInputSchema, mandateSchema, sessionSchema } = require("../server/schemas");
 
 function session() {
   const members = [
@@ -132,6 +129,22 @@ test("rejects a proxy assigned to an absent councillor", () => {
   const value = session();
   value.presence.m1.present = false;
   assert.equal(sessionSchema.safeParse(value).success, false);
+});
+
+test("rejects a member without attendance instead of crashing", () => {
+  const value = session();
+  delete value.presence.m1;
+  assert.equal(sessionSchema.safeParse(value).success, false);
+  value.presence.other = { present: false, mandataire: null };
+  assert.equal(sessionSchema.safeParse(value).success, false);
+});
+
+test("rejects impossible session dates", () => {
+  const value = session();
+  value.seance.date = "2026-02-30";
+  assert.equal(sessionSchema.safeParse(value).success, false);
+  value.seance.date = "2024-02-29";
+  assert.equal(sessionSchema.safeParse(value).success, true);
 });
 
 test("rejects duplicate councillor ids", () => {

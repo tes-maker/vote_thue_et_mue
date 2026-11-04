@@ -2,13 +2,30 @@
 
 L'API est servie par le même serveur que l'interface, sous le préfixe `/api`. Les réponses sont en JSON, sauf la déconnexion qui renvoie `204 No Content`. Les routes `/api/v1/...` sont les routes versionnées destinées aux intégrations ; les routes historiques restent disponibles pour le site actuel. Tous les clients d'une instance partagent le même registre et les mêmes données.
 
+## Vue d'ensemble
+
+| Méthode et route | Rôle | Authentification | `If-Match` |
+| --- | --- | --- | --- |
+| `GET /health` | État du serveur et de la base | aucune | non |
+| `POST /auth/login` | Ouvrir une session | aucune | non |
+| `GET /auth/me` | Session courante | aucune | non |
+| `POST /auth/logout` | Fermer la session | session + CSRF | non |
+| `GET /mandate` | Lire le mandat courant | session ou bearer | non |
+| `PUT /mandate` | Créer ou modifier le mandat | session + CSRF, ou bearer | oui |
+| `GET /state` | Lire la séance et les archives | session ou bearer | non |
+| `PUT /state` | Remplacer la séance | session + CSRF, ou bearer | oui |
+| `POST /archive` | Archiver la séance | session + CSRF, ou bearer | oui |
+| `PUT /state/import` | Importer une séance et des archives | session + CSRF, ou bearer | oui |
+
+Toutes ces routes sont préfixées par `/api`. Celles qui ne commencent pas par `/auth` existent aussi sous `/api/v1`.
+
 ## Authentification et protections
 
 - La connexion crée une session serveur stockée dans PostgreSQL et renvoie un cookie de session `HttpOnly`, `SameSite=Strict`. En production, le cookie est également `Secure`.
 - Avec une session, les requêtes mutantes doivent fournir le jeton CSRF reçu dans la réponse de connexion ou de `/api/auth/me`, dans l'en-tête `X-CSRF-Token`.
 - Les intégrations serveur-à-serveur peuvent utiliser `Authorization: Bearer <jeton>` si `API_BEARER_TOKEN` est défini sur le serveur. Configurez un jeton aléatoire d'au moins 32 caractères, par exemple avec `openssl rand -hex 32`. Ce jeton donne le même accès en lecture et écriture que le compte administrateur ; ne l'intégrez jamais dans le code JavaScript d'un site public. Les requêtes bearer n'ont pas besoin de session ni de jeton CSRF.
-- Les routes qui modifient l'état demandent également la révision actuelle dans l'en-tête `If-Match`. La révision retournée par l'API doit être réutilisée telle quelle, sous forme de chaîne.
-- Le client web envoie les cookies en same-origin. Une session expire après huit heures d'inactivité glissante.
+- Les routes qui modifient l'état demandent également la révision actuelle dans l'en-tête `If-Match` : la dernière valeur renvoyée par l'API. Si quelqu'un a écrit entre-temps, la requête échoue en `409` sans rien modifier ; il faut alors relire les données avant de réessayer. La séance et le mandat ont chacun leur propre révision.
+- Le client web envoie les cookies en same-origin. Une session serveur expire après huit heures sans requête. Le navigateur, lui, déconnecte l'utilisateur après quinze minutes d'inactivité.
 - L'API est destinée à une intégration côté serveur et n'active pas CORS pour les navigateurs tiers.
 
 Exemple de lecture depuis le serveur d'un site tiers :
@@ -54,7 +71,7 @@ Réponse `200` (le cookie de session est posé par le serveur) :
 }
 ```
 
-Réponses d'erreur : `400 invalid_data` pour un corps invalide ; `400 invalid_credentials` ou `401 invalid_credentials` pour des identifiants invalides ; `429` si la limite de tentatives est atteinte.
+Réponses d'erreur : `400 invalid_data` pour un corps invalide ; `400 invalid_credentials` si le mot de passe dépasse 72 octets ; `401 invalid_credentials` si l'adresse ou le mot de passe est incorrect ; `429` si la limite de tentatives est atteinte. Les connexions réussies comptent aussi dans la limite.
 
 ### `GET /api/auth/me`
 
@@ -117,7 +134,7 @@ Réponse `200` :
 }
 ```
 
-Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `409 mandate_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque.
+Erreurs possibles : `400 invalid_data`, `400 invalid_revision` si la révision est trop grande, `401 unauthorized`, `403 csrf_invalid`, `409 mandate_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque ou n'est pas un entier positif.
 
 ### `GET /api/state` et `GET /api/v1/state`
 
@@ -189,7 +206,7 @@ Corps :
 }
 ```
 
-Les membres historiques sans champ `actif` sont acceptés et traités comme étant en exercice. Un vote contient `id`, `numero`, `objet`, `choix`, `electeurs` et `president` ; chaque électeur est une copie du membre au moment du vote, avec `present` et `mandataire`. Les choix possibles sont `pour`, `contre`, `abst` et `npp`. Les limites et règles de cohérence détaillées sont validées par le schéma du serveur.
+Les membres historiques sans champ `actif` sont acceptés et traités comme étant en exercice. Un vote contient `id`, `numero`, `objet`, `choix`, `electeurs` et `president` ; chaque électeur est une copie du membre au moment du vote, avec `present` et `mandataire`. Les choix possibles sont `pour`, `contre`, `abst` et `npp`. Les limites et règles de cohérence détaillées sont définies dans [server/schemas.js](./server/schemas.js).
 
 `votesConfidentiels` est facultatif à l'écriture (il vaut alors `[]` pour les données antérieures à cette fonctionnalité). Chaque vote confidentiel contient un plafond `limite` fixé au nombre d'élus en exercice lors de sa création, des choix nommés dans `options`, ainsi que les compteurs `abstentions` et `npp` (« ne prend pas part au vote »). Chaque suffrage est ajouté à une option, à l'abstention ou à la non-participation. Seuls les nombres agrégés sont stockés : aucune identité ni aucun choix individuel n'est associé à un bulletin. La somme des voix des options, des abstentions et des NPP ne peut dépasser `limite`. Le format antérieur `structures` est encore accepté en entrée et renvoyé sous le nom canonique `options`.
 
@@ -199,7 +216,7 @@ Réponse `200` :
 { "revision": 13 }
 ```
 
-Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque.
+Erreurs possibles : `400 invalid_data`, `400 invalid_revision` si la révision est trop grande, `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque ou n'est pas un entier positif.
 
 ### `POST /api/archive` et `POST /api/v1/archive`
 
@@ -222,7 +239,7 @@ Une archive ayant le même identifiant de séance est remplacée. Erreurs possib
 
 ### `PUT /api/state/import` et `PUT /api/v1/state/import`
 
-Importe un état actif et une liste d'archives. Cette route est principalement utilisée lors de la migration des anciennes données locales. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer.
+Importe un état actif et une liste d'archives, par exemple depuis une autre instance. L'interface web ne l'utilise pas. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer.
 
 Corps :
 
@@ -262,7 +279,7 @@ Les erreurs de l'API sont renvoyées sous la forme :
 { "error": "code_erreur" }
 ```
 
-Les codes particuliers et leurs statuts sont indiqués avec chaque route. Une erreur interne inattendue renvoie `500 server_error`.
+Les codes particuliers et leurs statuts sont indiqués avec chaque route. Une erreur interne inattendue renvoie `500 server_error`. Un corps qui n'est pas du JSON valide renvoie `400 invalid_data`, sur toutes les routes et avant même le contrôle d'authentification.
 
 ## Routes inconnues
 

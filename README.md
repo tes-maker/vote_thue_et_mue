@@ -1,6 +1,16 @@
 # Votes du conseil municipal – Thue et Mue
 
-Application web pour préparer les séances du conseil municipal, saisir les présences, procurations et votes, consulter l'historique et exporter les résultats.
+Application web pour préparer les séances du conseil municipal, saisir les présences, procurations et votes, consulter l'historique et exporter les résultats. Elle est conçue pour une seule commune : tous les comptes partagent le même registre.
+
+**Documentation**
+
+- [Lancer l'application en local](#lancer-lapplication-en-local)
+- [Utilisation](#utilisation) et [règles de calcul](#règles-de-calcul)
+- [Configuration](#configuration)
+- [Architecture](#architecture) et [développement](#développement)
+- [Sécurité et limites](#sécurité-et-limites)
+- [Déploiement en production](docs/deploiement.md) : serveur, HTTPS, sauvegardes, restauration
+- [API HTTP](endpoints.md) : routes, formats d'échange, codes d'erreur
 
 ## Aperçu des onglets
 
@@ -15,16 +25,6 @@ Application web pour préparer les séances du conseil municipal, saisir les pr�
 ### Liste des élus
 
 ![Gestion de la liste des élus](images/list.png)
-
-## Fonctionnement
-
-- L'interface est servie par le serveur Node.js ; elle ne doit pas être ouverte directement avec `index.html` ni via `python -m http.server`.
-- L'API enregistre automatiquement la séance en cours et les archives dans PostgreSQL. Plusieurs postes connectés au même serveur partagent les mêmes données.
-- La liste des routes HTTP versionnées, des formats d'échange et des protections est décrite dans [endpoints.md](./endpoints.md). Une intégration serveur-à-serveur peut utiliser un jeton bearer configuré dans `API_BEARER_TOKEN`; le jeton ne doit jamais être exposé au navigateur.
-- La connexion utilise un compte serveur. Le mot de passe n'est jamais envoyé au navigateur autrement que pour la requête HTTPS de connexion ; les sessions sont conservées côté serveur.
-- Le bouton **Archiver cette séance** crée une copie consultable dans l'onglet **Historique**. Le serveur archive également la séance avant le démarrage d'une nouvelle séance.
-- Les boutons **Exporter les résultats (CSV)** et **Exporter en JSON** téléchargent des copies destinées à l'exploitation ou à l'échange. Ils ne servent pas à sauvegarder le serveur.
-- À la première connexion après mise à jour, les anciennes données du navigateur sont migrées vers PostgreSQL si elles sont encore présentes. Elles ne sont supprimées du navigateur qu'après la migration réussie.
 
 ## Lancer l'application en local
 
@@ -65,7 +65,7 @@ chmod 600 .env
 nano .env
 ```
 
-Dans `.env`, configurez les valeurs suivantes. Remplacez le mot de passe par celui défini pour PostgreSQL et générez un secret de session neuf avec `openssl rand -hex 32` dans un autre terminal :
+Dans `.env`, configurez les valeurs suivantes. Gardez `NODE_ENV=development` : en local, l'application est servie en HTTP et `production` empêcherait la connexion. Remplacez le mot de passe par celui défini pour PostgreSQL et générez un secret de session neuf avec `openssl rand -hex 32` dans un autre terminal :
 
 ```dotenv
 NODE_ENV=development
@@ -85,7 +85,7 @@ Installez les dépendances, créez les tables et le compte administrateur :
 ```bash
 npm ci
 npm run db:migrate
-npm run admin:create -- paul@exemple.fr
+npm run admin:create -- administrateur@exemple.fr
 ```
 
 La commande de création du compte demande un mot de passe administrateur. Exécutez-la une seule fois pour créer ce compte. Si l'adresse existe déjà, ne relancez pas la commande : connectez-vous avec le compte existant. Pour démarrer l'application :
@@ -96,218 +96,137 @@ npm start
 
 Ouvrez [http://127.0.0.1:3000](http://127.0.0.1:3000) dans votre navigateur et connectez-vous avec le compte créé. Le serveur reste actif dans le terminal ; **Ctrl+C** l'arrête. Les données sont stockées dans la base PostgreSQL locale.
 
-## Installation sur un serveur Linux
-
-Exemple pour Ubuntu ou Debian avec PostgreSQL, Node.js 20 ou plus récent, et Nginx en HTTPS. Installez Node.js 20+ depuis une source de paquets approuvée par votre organisation, puis vérifiez `node --version` et `npm --version`. Les commandes d'administration sont à adapter à votre environnement.
-
-### 1. Installer PostgreSQL et créer la base
-
-```bash
-sudo apt update
-sudo apt install postgresql nginx
-```
-
-Créez un utilisateur et une base dédiés :
-
-```bash
-sudo -u postgres psql
-```
-
-Dans l'invite PostgreSQL :
-
-```sql
-CREATE ROLE vote_app LOGIN;
-CREATE DATABASE vote_app OWNER vote_app;
-\password vote_app
-\q
-```
-
-La commande `\password vote_app` demande un mot de passe sans l'inscrire dans l'historique SQL. Pour simplifier l'URL de connexion, générez-en un composé de caractères hexadécimaux, par exemple avec `openssl rand -hex 32`. Conservez-le dans un gestionnaire de secrets ou dans le fichier d'environnement protégé du serveur ; ne le placez pas dans le dépôt.
-
-### 2. Installer l'application
-
-Copiez le dépôt dans `/opt/vote_thue_et_mue`, puis installez les dépendances :
-
-```bash
-cd /opt/vote_thue_et_mue
-npm ci --omit=dev
-```
-
-Créez le compte système et les dossiers de configuration :
-
-```bash
-sudo useradd --system --home /opt/vote_thue_et_mue --shell /usr/sbin/nologin vote-cm
-sudo install -d -o root -g vote-cm -m 750 /etc/vote-cm
-sudo install -d -o vote-cm -g vote-cm -m 700 /var/backups/vote-cm
-```
-
-Créez `/etc/vote-cm/app.env` à partir de [.env.example](./.env.example). Remplacez le mot de passe de base et générez un secret de session :
-
-```bash
-openssl rand -hex 32
-```
-
-Exemple de configuration (ne copiez pas les valeurs d'exemple telles quelles) :
-
-```dotenv
-NODE_ENV=production
-HOST=127.0.0.1
-PORT=3000
-DATABASE_URL=postgresql://vote_app:MOT_DE_PASSE_POSTGRES@127.0.0.1:5432/vote_app
-SESSION_SECRET=COLLER_ICI_UN_SECRET_GENERE_AVEC_OPENSSL
-# Facultatif : openssl rand -hex 32 ; ne jamais exposer dans le navigateur
-API_BEARER_TOKEN=COLLER_ICI_UN_JETON_ALEATOIRE
-TRUST_PROXY=1
-```
-
-Supprimez `API_BEARER_TOKEN` si vous n'avez pas d'intégration serveur-à-serveur. Sinon, générez un jeton distinct avec `openssl rand -hex 32`. Utilisez le mot de passe hexadécimal choisi précédemment dans `DATABASE_URL` (ou encodez les caractères spéciaux selon le format d'URL). Protégez ce fichier :
-
-```bash
-sudo chown root:vote-cm /etc/vote-cm/app.env
-sudo chmod 640 /etc/vote-cm/app.env
-```
-
-Appliquez le schéma et créez le compte de connexion de l'application :
-
-```bash
-cd /opt/vote_thue_et_mue
-sudo -u vote-cm env APP_ENV_FILE=/etc/vote-cm/app.env npm run db:migrate
-sudo -u vote-cm env APP_ENV_FILE=/etc/vote-cm/app.env npm run admin:create -- administrateur@exemple.fr
-```
-
-La seconde commande demande le mot de passe sans l'afficher. Choisissez un mot de passe unique d'au moins 12 caractères.
-
-### 3. Démarrer l'application
-
-Installez et activez le service systemd fourni :
-
-```bash
-sudo cp deploy/vote-cm.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vote-cm
-sudo systemctl status vote-cm
-```
-
-L'API écoute uniquement sur `127.0.0.1:3000`. Vérifiez son état depuis le serveur :
-
-```bash
-curl http://127.0.0.1:3000/api/health
-```
-
-La réponse attendue est `{"status":"ok"}`.
-
-### 4. Activer HTTPS avec Nginx
-
-Configurez un nom DNS et un certificat TLS, puis ajoutez un site Nginx qui transmet les requêtes à Node.js :
-
-```nginx
-server {
-    listen 80;
-    server_name votes.exemple.fr;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name votes.exemple.fr;
-
-    ssl_certificate /etc/letsencrypt/live/votes.exemple.fr/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/votes.exemple.fr/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-N'exposez pas directement le port 3000 ni le port PostgreSQL sur Internet. `TRUST_PROXY=1` ne doit être activé que si Node.js est accessible uniquement derrière ce reverse proxy de confiance.
-
-### 5. Activer les sauvegardes automatiques
-
-Les sauvegardes sont faites sur le serveur avec `pg_dump`, chaque jour à 02 h 15 ; systemd les relance après un redémarrage. Les fichiers PostgreSQL vérifiés sont conservés 30 jours dans `/var/backups/vote-cm`.
-
-Créez un compte PostgreSQL de sauvegarde en lecture seule :
-
-```bash
-sudo -u postgres psql
-```
-
-```sql
-CREATE ROLE vote_backup LOGIN;
-GRANT CONNECT ON DATABASE vote_app TO vote_backup;
-GRANT pg_read_all_data TO vote_backup;
-\password vote_backup
-\q
-```
-
-Générez un autre mot de passe avec `openssl rand -hex 32`, puis créez `/etc/vote-cm/pgpass` avec cette ligne :
-
-```text
-127.0.0.1:5432:vote_app:vote_backup:MOT_DE_PASSE_DE_SAUVEGARDE
-```
-
-Puis protégez-le :
-
-```bash
-sudo chown vote-cm:vote-cm /etc/vote-cm/pgpass
-sudo chmod 600 /etc/vote-cm/pgpass
-```
-
-Créez `/etc/vote-cm/backup.env` :
-
-```dotenv
-PGHOST=127.0.0.1
-PGPORT=5432
-PGDATABASE=vote_app
-PGUSER=vote_backup
-PGPASSFILE=/etc/vote-cm/pgpass
-```
-
-Installez et activez le minuteur :
-
-```bash
-sudo cp deploy/vote-cm-backup.service deploy/vote-cm-backup.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vote-cm-backup.timer
-sudo systemctl start vote-cm-backup.service
-sudo systemctl status vote-cm-backup.service
-```
-
-Vérifiez régulièrement les journaux avec `journalctl -u vote-cm-backup.service`. Gardez également une copie chiffrée des sauvegardes sur un autre serveur ou un stockage indépendant : une sauvegarde située sur le même disque ne protège pas d'une panne de ce disque.
-
-Pour restaurer une sauvegarde, arrêtez l'application, restaurez le fichier `.dump` dans une base de données, vérifiez les données, puis redémarrez l'application. Exemple de restauration vers une base dédiée :
-
-```bash
-sudo -u postgres createdb --owner=vote_app vote_app_restore
-sudo install -o postgres -g postgres -m 600 /var/backups/vote-cm/votes-AAAAmmjjTHHMMSSZ.dump /tmp/vote-restore.dump
-sudo -u postgres pg_restore --no-owner --role=vote_app --dbname=vote_app_restore /tmp/vote-restore.dump
-sudo rm /tmp/vote-restore.dump
-```
-
-Après vérification, modifiez `DATABASE_URL` dans `/etc/vote-cm/app.env` pour pointer vers la base restaurée, puis redémarrez le service. Ne restaurez pas une sauvegarde en production sans avoir d'abord conservé une copie de la base actuelle.
+L'interface est toujours servie par ce serveur Node.js : elle ne fonctionne pas en ouvrant directement `index.html` ni via `python -m http.server`.
 
 ## Utilisation
 
-1. Connectez-vous avec le compte créé par l'administrateur du serveur.
-   Chaque onglet est accessible avec sa propre adresse : `/presence`, `/votes`, `/confidential`, `/elus` et `/history`. Vous pouvez ouvrir un onglet directement ou partager son URL.
-2. Dans **Liste des élus**, utilisez **Modifier** puis **Valider** pour corriger un nom ou une fonction. Le statut **En exercice / Démissionnaire** permet de retirer un membre des présences et des nouveaux votes sans supprimer ses votes déjà enregistrés.
-3. Dans **Séance & présences**, renseignez l'intitulé, la date, le président, puis les présences et procurations. Un élu présent peut porter plusieurs procurations.
-4. Dans **Votes**, créez chaque délibération puis saisissez les votes. Les votants sont enregistrés au moment où la délibération est créée ; ils sont « Pour » par défaut.
-5. Dans **Votes confidentiels**, créez un scrutin, nommez autant d'options que nécessaire, puis ajoutez chaque suffrage à une option, à **Abstention** ou à **Ne prend pas part au vote**. Les compteurs sont anonymes et leur somme est plafonnée au nombre d'élus en exercice lors de la création du scrutin.
-6. Utilisez **Exporter les résultats (CSV)** pour obtenir un tableau plat : une ligne par suffrage nominatif et des lignes agrégées anonymes pour les votes confidentiels. Le fichier est encodé en UTF-8 avec BOM pour faciliter son ouverture dans Excel.
-7. Utilisez **Exporter en JSON** pour obtenir les données détaillées de la séance en cours.
-8. Cliquez sur **Archiver cette séance**, désormais placé en haut de l'onglet séance, pour la conserver dans l'historique du serveur. Pour corriger les titres d'une séance archivée, reprenez-la depuis **Historique**, modifiez les votes dans leurs onglets respectifs, puis archivez à nouveau la séance.
+1. **Connexion.** Connectez-vous avec le compte créé par l'administrateur du serveur. Chaque onglet a sa propre adresse, que l'on peut ouvrir directement ou partager : `/presence`, `/votes`, `/confidential`, `/elus` et `/history`.
+2. **Liste des élus.** **Modifier** puis **Valider** corrigent un nom ou une fonction. Le statut **En exercice / Démissionnaire** retire un membre des présences et des nouveaux votes sans supprimer ses votes déjà enregistrés.
+3. **Séance & présences.** Renseignez l'intitulé, la date, le président, puis les présences et procurations. Un élu présent peut porter plusieurs procurations.
+4. **Votes.** Créez chaque délibération, puis saisissez les votes. Les votants sont figés à la création de la délibération et votent « Pour » par défaut. Modifier ensuite les présences ne change donc pas un vote existant.
+5. **Votes confidentiels.** Créez un scrutin, nommez autant d'options que nécessaire, puis ajoutez chaque suffrage à une option, à **Abstention** ou à **Ne prend pas part au vote**. Seuls des compteurs anonymes sont enregistrés.
+6. **Archivage.** **Archiver cette séance**, en haut de l'onglet séance, crée une copie consultable dans **Historique**. Le serveur archive aussi la séance avant d'en démarrer une nouvelle. Pour corriger une séance archivée, reprenez-la depuis **Historique**, modifiez-la, puis archivez-la à nouveau : l'archive précédente est remplacée.
+7. **Exports.** Ils concernent la séance en cours et ne servent pas de sauvegarde (voir [les sauvegardes](docs/deploiement.md#5-activer-les-sauvegardes-automatiques)) :
+   - **Exporter les résultats (CSV)** : tableau plat séparé par des points-virgules, encodé en UTF-8 avec BOM pour Excel. Une ligne par suffrage nominatif (`ballot_type` = `nominal`) et, pour les votes confidentiels, une ligne anonyme par compteur (`confidential`). Pour un vote nominal, la colonne `result` contient un code stable, non traduit, comme `res_adopted`.
+   - **Exporter en JSON** : données détaillées de la séance.
 
-Le résultat est calculé automatiquement. En cas d'égalité, la voix du président de séance est prépondérante. Les votes déjà enregistrés conservent le nom et le choix de l'élu même si celui-ci est ensuite retiré de la liste.
+Les données sont enregistrées automatiquement sur le serveur à chaque action. Si un autre poste a modifié la séance entre-temps, l'enregistrement est refusé et un message demande de recharger la page, pour éviter d'écraser son travail.
+
+### Règles de calcul
+
+| Règle | Fonctionnement |
+| --- | --- |
+| Résultat d'un vote nominal | Adopté si les « pour » dépassent les « contre » ; abstentions et non-participations ne comptent pas. Sans aucun « pour » ni « contre », le vote n'a pas de résultat. |
+| Égalité | La voix du président de séance est prépondérante. S'il s'est abstenu ou n'a pas participé, le vote est rejeté. |
+| Votants | « Pour », « contre » et abstentions ; la non-participation n'en fait pas partie. |
+| Quorum | Plus de la moitié des élus en exercice doivent être **présents** ; les procurations ne comptent pas. |
+| Procuration | Elle ne peut être portée que par un élu présent et en exercice. Si le porteur devient absent, elle est annulée. |
+| Vote confidentiel | La somme des options, abstentions et non-participations est plafonnée au nombre d'élus en exercice à la création du scrutin. |
+
+Ces règles sont codées dans [js/votes.js](js/votes.js) et [js/state.js](js/state.js) côté navigateur, et les contraintes de cohérence sont vérifiées à nouveau par [server/schemas.js](server/schemas.js).
+
+## Configuration
+
+Le serveur lit le fichier `.env`, ou celui désigné par `APP_ENV_FILE`. Il refuse de démarrer si une valeur obligatoire manque ou est invalide.
+
+| Variable | Obligatoire | Rôle |
+| --- | --- | --- |
+| `DATABASE_URL` | oui | URL de connexion PostgreSQL. |
+| `SESSION_SECRET` | oui | Secret de signature des sessions, 32 caractères minimum. |
+| `NODE_ENV` | non | `production` rend le cookie de session `Secure` : HTTPS devient obligatoire. |
+| `HOST` | non | Adresse d'écoute, `127.0.0.1` par défaut. |
+| `PORT` | non | Port d'écoute, `3000` par défaut. |
+| `TRUST_PROXY` | non | `1` derrière un reverse proxy de confiance, indispensable avec `NODE_ENV=production` derrière Nginx. |
+| `API_BEARER_TOKEN` | non | Jeton des intégrations serveur-à-serveur, 32 caractères minimum. Sans lui, seule la connexion par session est possible. |
+
+## Architecture
+
+L'application se compose d'un serveur Express, d'une base PostgreSQL et d'une interface en JavaScript sans framework ni étape de compilation.
+
+```text
+navigateur (index.html, js/, style.css)
+    │  JSON, cookie de session
+    ▼
+server.js ── server/schemas.js (validation)
+    │
+    ▼
+PostgreSQL (server/schema.sql)
+```
+
+```text
+server.js              API, protections, fichiers publics
+server/schemas.js      format d'une séance et règles de cohérence
+server/schema.sql      tables, rejoué à chaque démarrage
+js/                    interface, chargée dans l'ordre fixé par index.html :
+  i18n.js                traductions, langue, thème
+  data.js                liste initiale des élus, choix de vote
+  utils.js               petits utilitaires
+  api.js                 requêtes vers le serveur
+  state.js               séance en cours, chargement, enregistrement, archives
+  votes.js               calcul du résultat d'un vote
+  render.js              affichage des onglets
+  actions.js             réaction aux clics, saisies et formulaires
+  export.js              exports CSV et JSON
+  auth.js                connexion et déconnexion
+  main.js                démarrage
+scripts/               migration, création de compte, sauvegarde
+deploy/                services et minuteur systemd
+test/                  tests automatisés
+```
+
+### Cycle d'une action
+
+1. Un élément porte l'attribut `data-act`, `data-change` ou `data-submit`. Un écouteur unique appelle le gestionnaire du même nom dans [js/actions.js](js/actions.js).
+2. Le gestionnaire modifie l'objet global `S` (la séance), puis appelle `commit()`.
+3. `commit()` rétablit la cohérence avec `sanitize()`, redessine l'onglet, puis envoie la séance entière au serveur. Les envois partent l'un après l'autre, car chacun utilise la révision renvoyée par le précédent.
+4. Le serveur valide la séance et ne l'enregistre que si la révision reçue est toujours la bonne. Sinon il répond `409` : le navigateur bloque alors les écritures jusqu'au rechargement de la page ou à une nouvelle connexion.
+
+### Données
+
+La séance en cours est un unique document JSON, stocké dans `app_state`. Sa structure est décrite dans [endpoints.md](endpoints.md#put-apistate-et-put-apiv1state).
+
+| Table | Contenu |
+| --- | --- |
+| `app_state` | Séance en cours (une seule ligne) et sa révision. |
+| `session_archives` | Copie complète de chaque séance archivée. |
+| `mandate_periods` | Mandats successifs, dont un seul est courant. |
+| `app_users` | Comptes de connexion. |
+| `audit_log` | Journal des écritures (`state.updated`, `state.imported`, `session.archived`, `mandate.created`, `mandate.updated`), sans leur contenu. |
+| `user_sessions` | Sessions, créée automatiquement au premier démarrage. |
+
+### Compatibilité avec les anciennes données
+
+Le serveur valide tout ce qu'il lit et écrit ; le navigateur reçoit donc toujours des données au format actuel. Les seuls vestiges des anciens formats se trouvent dans [server/schemas.js](server/schemas.js) :
+
+- `actif`, absent des plus anciens élus, vaut `true` par défaut ;
+- `votesConfidentiels`, absent des anciennes séances, vaut une liste vide ;
+- `structures` est l'ancien nom de `options` dans les votes confidentiels.
+
+Les données d'avant le stockage serveur, restées dans le navigateur sous les clés `vote-cm-v1` et `vote-cm-history-v1`, ne sont plus importées ni supprimées. Pour en récupérer, reprenez le code de migration dans l'historique Git, ou passez par [`PUT /api/state/import`](endpoints.md#put-apistateimport-et-put-apiv1stateimport).
+
+## Développement
+
+```bash
+npm test          # tests automatisés, sans base de données
+npm start         # démarre le serveur, avec la configuration de .env
+npm run db:migrate
+npm run admin:create -- adresse@exemple.fr
+```
+
+Quelques repères pour modifier le code :
+
+- **Ajouter un texte** : ajoutez la clé dans les deux langues de [js/i18n.js](js/i18n.js).
+- **Ajouter une action** : ajoutez un gestionnaire dans [js/actions.js](js/actions.js) et l'attribut `data-*` correspondant dans [js/render.js](js/render.js).
+- **Faire évoluer le format d'une séance** : modifiez [server/schemas.js](server/schemas.js). Les archives existantes doivent rester lisibles, car elles sont revalidées à chaque lecture : donnez une valeur par défaut à tout nouveau champ.
+- **Modifier la base** : modifiez [server/schema.sql](server/schema.sql), qui doit pouvoir être rejoué sans erreur sur une base existante.
+- **Ajouter un champ de saisie** : donnez-lui la même limite (`maxlength`) que dans [server/schemas.js](server/schemas.js), car un enregistrement refusé bloque les suivants jusqu'au rechargement.
+- **Afficher une donnée saisie** : passez-la toujours par `esc()`, car les onglets sont construits en HTML.
+- **Servir un nouveau fichier à la racine** : ajoutez-le à `PUBLIC_FILES` dans [server.js](server.js).
 
 ## Sécurité et limites
 
-- Le site doit être utilisé en HTTPS. La connexion utilise un cookie de session `HttpOnly`, `Secure` en production et `SameSite=Strict`, avec expiration après inactivité.
-- Les mots de passe sont stockés sous forme de hash bcrypt ; les tentatives de connexion sont limitées.
-- L'API valide les données et refuse une sauvegarde si une autre connexion a modifié la séance entre-temps. Les intégrations bearer sont serveur-à-serveur, donnent un accès complet au registre partagé et doivent protéger le jeton comme un secret administrateur.
-- Les comptes sont créés depuis le serveur avec `npm run admin:create -- adresse@exemple.fr`. Il n'existe pas encore d'écran de gestion des comptes.
-- L'application est conçue pour une seule commune et un seul registre partagé. Les sauvegardes PostgreSQL automatiques doivent être testées périodiquement en effectuant une restauration de contrôle.
+- Le site doit être utilisé en HTTPS. La connexion utilise un cookie de session `HttpOnly`, `Secure` en production et `SameSite=Strict`. Le navigateur déconnecte après 15 minutes d'inactivité ; la session serveur expire après 8 heures sans requête.
+- Les mots de passe sont stockés sous forme de hash bcrypt ; les tentatives de connexion sont limitées à 10 par période de 15 minutes.
+- Le jeton `API_BEARER_TOKEN` donne un accès complet au registre : protégez-le comme un secret administrateur et ne l'exposez jamais au navigateur.
+- Les comptes se créent depuis le serveur avec `npm run admin:create`. Il n'existe pas d'écran de gestion des comptes, et tous les comptes ont les mêmes droits.
+- Testez périodiquement les sauvegardes PostgreSQL en effectuant une restauration de contrôle.

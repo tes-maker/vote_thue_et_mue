@@ -1,9 +1,18 @@
 /* ---------- affichage des onglets ----------
+   Chaque onglet est reconstruit en HTML depuis S par sa fonction render*().
    Les boutons portent data-act (clic), les champs data-change (modification),
-   les formulaires data-submit : voir actions.js. */
+   les formulaires data-submit : voir actions.js. Tout texte saisi passe par esc().
+   Les maxlength reprennent les limites de server/schemas.js : un texte refusé par le
+   serveur bloquerait les enregistrements suivants jusqu'au rechargement de la page. */
 const TAB_IDS = ["presence", "votes", "confidential", "elus", "history"];
-const tabFromPath = () => window.location.pathname.split("/").filter(Boolean).at(-1);
-let current = typeof window !== "undefined" && TAB_IDS.includes(tabFromPath()) ? tabFromPath() : "presence";
+/** Onglet désigné par l'adresse de la page ; le premier par défaut. */
+function tabFromPath() {
+  const tab = window.location.pathname.split("/").filter(Boolean).at(-1);
+  return TAB_IDS.includes(tab) ? tab : "presence";
+}
+
+// État de l'affichage, non enregistré : onglet, vote déplié, lignes en cours de modification.
+let current = tabFromPath();
 let openVote = null;
 let editingMember = null;
 let editingVoteTitle = null;
@@ -15,17 +24,20 @@ function navigateToTab(tab) {
   if (window.location.pathname !== path) window.history.pushState(null, "", path);
 }
 
-if (typeof window !== "undefined") {
-  window.addEventListener("popstate", () => {
-    const pathTab = tabFromPath();
-    current = TAB_IDS.includes(pathTab) ? pathTab : "presence";
-    render();
-  });
-}
+window.addEventListener("popstate", () => {
+  current = tabFromPath();
+  render();
+});
 
 // Attributs data-* échappés : attrs({ act: "x", id: 1 }) -> data-act="x" data-id="1"
 const attrs = o => Object.entries(o).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
 const option = (value, label, selected) => `<option value="${esc(value)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+const resultBadge = r => `<span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>`;
+
+/** Numéro proposé pour le prochain vote : un de plus que le plus grand de toutes les listes données. */
+const nextNumber = (...lists) => Math.max(0, ...lists.flat().map(v => parseInt(v.numero, 10) || 0)) + 1;
+
+/** Redessine entièrement l'onglet courant : les valeurs viennent de S à chaque fois. */
 
 function render() {
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.val === current));
@@ -62,7 +74,7 @@ function renderPresence() {
     const proc = p.present
       ? (represented.length ? `<span class="note">${t("proxyHolder")} <b>${represented.map(m => esc(m.nom)).join(", ")}</b></span>` : "")
       : `<select ${attrs({ change: "mandataire", id: e.id })}>${option("", t("noProxy"))}${
-          presents.filter(h => h.id !== e.id || p.mandataire === h.id).map(h => option(h.id, h.nom, p.mandataire === h.id)).join("")
+          presents.map(h => option(h.id, h.nom, p.mandataire === h.id)).join("")
         }</select>`;
     return `<tr>
       <td><div>${esc(e.nom)}</div><div class="f">${esc(e.fonction)}</div></td>
@@ -87,8 +99,8 @@ function renderPresence() {
       </div>
     </div>
     <div class="grid">
-      <label>${t("sessionTitle")}<input value="${esc(S.seance.titre)}" data-change="titre"></label>
-      <label>${t("date")}<input type="date" value="${esc(S.seance.date)}" data-change="date"></label>
+      <label>${t("sessionTitle")}<input value="${esc(S.seance.titre)}" data-change="titre" maxlength="255"></label>
+      <label>${t("date")}<input type="date" value="${esc(S.seance.date)}" data-change="date" required></label>
       <label>${t("president")}<select data-change="president">${activeMembers.map(e => option(e.id, e.nom, S.seance.president === e.id)).join("")}</select></label>
     </div>
     ${renderStats()}
@@ -107,10 +119,11 @@ function renderPresence() {
     `;
 }
 
+/** Titre d'un vote ; sans `type` (archives), il n'est pas modifiable. */
 function renderVoteTitle(vote, type = null) {
   const isEditing = type !== null && editingVoteTitle?.voteId === vote.id && editingVoteTitle.type === type;
   if (isEditing) {
-    return `<form class="row archive-vote-title" data-submit="saveVoteTitle" ${attrs({
+    return `<form class="row" data-submit="saveVoteTitle" ${attrs({
       vote: vote.id,
       type,
     })}>
@@ -120,7 +133,7 @@ function renderVoteTitle(vote, type = null) {
     </form>`;
   }
   const editButton = type === null ? "" : `<button class="link" ${attrs({ act: "editVoteTitle", vote: vote.id, type })}>${t("editTitle")}</button>`;
-  return `<div class="row spread archive-vote-title">
+  return `<div class="row spread">
     <h3>${esc(vote.numero)}. ${esc(vote.objet)}</h3>
     ${editButton}
   </div>`;
@@ -128,28 +141,24 @@ function renderVoteTitle(vote, type = null) {
 
 function renderHistory() {
   const entries = [...ARCHIVES].sort((a, b) => b.snapshot.seance.date.localeCompare(a.snapshot.seance.date)
-    || b.archivedAt.localeCompare(a.archivedAt));
+    || new Date(b.archivedAt) - new Date(a.archivedAt));
   const cards = entries.map(({ id, archivedAt, snapshot }) => {
     const votes = snapshot.votes.map(v => {
-      const vs = voteVoters(v);
-      const r = tally(v, vs, voteSession(v));
-      const details = vs.map(e => `<li>${esc(e.nom)} — ${t("choice_" + choice(v, e.id))}</li>`).join("");
+      const r = tally(v);
+      const details = v.electeurs.map(e => `<li>${esc(e.nom)} — ${t("choice_" + choice(v, e.id))}</li>`).join("");
       return `<article class="card">
         ${renderVoteTitle(v)}
-        <div class="row spread">
-          <span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>
-        </div>
+        <div class="row spread">${resultBadge(r)}</div>
         ${renderVoteTally(r)}
         <details><summary>${t("voteDetails")}</summary><ul>${details}</ul></details>
       </article>`;
     }).join("");
     const confidentialVotes = snapshot.votesConfidentiels.map(v => {
-      const totals = confidentialTotals(v);
       const options = v.options.map(option => `<li>${esc(option.nom)} — ${option.voix}</li>`).join("");
       return `<article class="card">
         ${renderVoteTitle(v)}
         <div class="row spread"><span class="badge">${t("confidentialLabel")}</span></div>
-        <div class="tally">${t("confidentialTotal")} <b>${totals.total}</b> / ${v.limite} · ${t("confidentialAbstentions")} <b>${v.abstentions}</b> · ${t("confidentialNpp")} <b>${v.npp}</b></div>
+        <div class="tally">${t("confidentialTotal")} <b>${confidentialTotal(v)}</b> / ${v.limite} · ${t("confidentialAbstentions")} <b>${v.abstentions}</b> · ${t("confidentialNpp")} <b>${v.npp}</b></div>
         <ul>${options || `<li>${t("noOptions")}</li>`}</ul>
       </article>`;
     }).join("");
@@ -171,12 +180,11 @@ function renderHistory() {
 }
 
 /* ---------- onglet Votes ---------- */
-function renderVoteDetail(v, vs) {
-  const rows = vs.map(e => {
+function renderVoteDetail(v) {
+  const rows = v.electeurs.map(e => {
     const c = choice(v, e.id);
-    const p = e;
-    const holder = vs.find(member => member.id === p.mandataire);
-    const via = p.present ? "" : `<div class="f">${t("viaProxy", { nom: esc(holder?.nom || "") })}</div>`;
+    const holder = v.electeurs.find(member => member.id === e.mandataire);
+    const via = e.present ? "" : `<div class="f">${t("viaProxy", { nom: esc(holder?.nom || "") })}</div>`;
     const btns = CHOIX.map(k => `<button class="${k}${c === k ? " on" : ""}" title="${t("choice_" + k)}" ${attrs({ act: "choice", vote: v.id, id: e.id, val: k })}>${
       t(k === "npp" ? "short_npp" : "choice_" + k)}</button>`).join("");
     return `<tr><td>${esc(e.nom)}${via}</td><td class="right"><div class="seg">${btns}</div></td></tr>`;
@@ -188,22 +196,20 @@ function renderVoteDetail(v, vs) {
 }
 
 function renderVotes() {
-  const next = Math.max(0, ...S.votes.map(v => parseInt(v.numero) || 0)) + 1;
   const cards = S.votes.map(v => {
-    const vs = voteVoters(v);
-    const r = tally(v, vs, voteSession(v));
+    const r = tally(v);
     const open = openVote === v.id;
     return `<div class="card">
       <div class="row spread">
       ${renderVoteTitle(v, "nominal")}
         <div class="row">
-          <span class="badge ${r.ok === true ? "ok" : r.ok === false ? "ko" : ""}">${t(r.res)}</span>
+          ${resultBadge(r)}
           <button class="b" ${attrs({ act: "toggleVote", vote: v.id })}>${t(open ? "close" : "enterVotes")}</button>
           <button class="link" ${attrs({ act: "delVote", vote: v.id })}>${t("delete")}</button>
         </div>
       </div>
       ${renderVoteTally(r)}
-      ${open ? renderVoteDetail(v, vs) : ""}
+      ${open ? renderVoteDetail(v) : ""}
     </div>`;
   }).join("");
 
@@ -211,8 +217,8 @@ function renderVotes() {
     ${renderStats()}
     <h2>${t("newItem")}</h2>
     <form class="row" data-submit="addVote">
-      <input name="numero" value="${next}" class="num" aria-label="${t("number")}">
-      <input name="objet" placeholder="${t("itemPlaceholder")}" class="grow" required>
+      <input name="numero" value="${nextNumber(S.votes, S.votesConfidentiels)}" class="num" maxlength="50" aria-label="${t("number")}">
+      <input name="objet" placeholder="${t("itemPlaceholder")}" class="grow" maxlength="5000" required>
       <button class="b primary lg">${t("add")}</button>
     </form>
     <p class="note">${t("defaultFor")}</p>
@@ -220,45 +226,37 @@ function renderVotes() {
     ${cards || `<p class="note">${t("noItems")}</p>`}`;
 }
 
-function confidentialTotals(v) {
-  const options = v.options.reduce((sum, option) => sum + option.voix, 0);
-  return { options, total: options + v.abstentions + v.npp };
-}
+/* ---------- onglet Votes confidentiels ---------- */
+const confidentialTotal = v => v.options.reduce((sum, option) => sum + option.voix, v.abstentions + v.npp);
 
+/** Valeur d'un compteur : une option désignée par son id, ou les abstentions / NPP du vote. */
+const confidentialCount = (v, target, id) => target === "option"
+  ? v.options.find(option => option.id === id)?.voix
+  : v[target];
+
+/** Met à jour les compteurs sans redessiner l'onglet, ce qui garde le focus sur le bouton cliqué. */
 function refreshConfidentialVote(vote) {
   const card = [...document.querySelectorAll("[data-confidential-vote]")]
     .find(element => element.dataset.confidentialVote === vote.id);
   if (!card) return;
 
-  const totals = confidentialTotals(vote);
-  card.querySelector("[data-confidential-limit]").textContent = t("confidentialLimit", {
-    total: totals.total,
-    limite: vote.limite,
-  });
+  const total = confidentialTotal(vote);
+  card.querySelector("[data-confidential-limit]").textContent = t("confidentialLimit", { total, limite: vote.limite });
   for (const element of card.querySelectorAll("[data-confidential-count]")) {
-    const count = element.dataset.confidentialTarget === "abstentions" || element.dataset.confidentialTarget === "npp"
-      ? vote[element.dataset.confidentialTarget]
-      : vote.options.find(option => option.id === element.dataset.confidentialId)?.voix;
+    const { confidentialTarget, confidentialId } = element.dataset;
+    const count = confidentialCount(vote, confidentialTarget, confidentialId);
     if (Number.isInteger(count)) element.textContent = String(count);
   }
   for (const button of card.querySelectorAll('[data-act="confidentialCount"]')) {
-    const count = button.dataset.target === "abstentions" || button.dataset.target === "npp"
-      ? vote[button.dataset.target]
-      : vote.options.find(option => option.id === button.dataset.id)?.voix;
     button.disabled = button.dataset.delta === "1"
-      ? totals.total >= vote.limite
-      : !Number.isInteger(count) || count === 0;
+      ? total >= vote.limite
+      : !confidentialCount(vote, button.dataset.target, button.dataset.id);
   }
 }
 
 function renderConfidentialVotes() {
-  const next = Math.max(
-    0,
-    ...S.votes.map(v => parseInt(v.numero, 10) || 0),
-    ...S.votesConfidentiels.map(v => parseInt(v.numero, 10) || 0),
-  ) + 1;
   const cards = S.votesConfidentiels.map(v => {
-    const totals = confidentialTotals(v);
+    const total = confidentialTotal(v);
     const rows = [
       ...v.options.map(option => ({
         id: option.id,
@@ -277,7 +275,7 @@ function renderConfidentialVotes() {
       })}>${row.count}</td>
       <td class="member-actions">
         <button type="button" class="member-action" ${attrs({ act: "confidentialCount", vote: v.id, id: row.id, target: row.target, delta: -1 })} ${row.count === 0 ? "disabled" : ""} aria-label="${esc(t("confidentialDecrement", { nom: row.label }))}">-</button>
-        <button type="button" class="member-action" ${attrs({ act: "confidentialCount", vote: v.id, id: row.id, target: row.target, delta: 1 })} ${totals.total >= v.limite ? "disabled" : ""} aria-label="${esc(t("confidentialIncrement", { nom: row.label }))}">+</button>
+        <button type="button" class="member-action" ${attrs({ act: "confidentialCount", vote: v.id, id: row.id, target: row.target, delta: 1 })} ${total >= v.limite ? "disabled" : ""} aria-label="${esc(t("confidentialIncrement", { nom: row.label }))}">+</button>
         ${row.target === "option" ? `<button type="button" class="link" ${attrs({ act: "delConfidentialOption", vote: v.id, id: row.id })}>${t("delete")}</button>` : ""}
       </td>
     </tr>`).join("");
@@ -286,7 +284,7 @@ function renderConfidentialVotes() {
         ${renderVoteTitle(v, "confidential")}
         <button class="link" ${attrs({ act: "delConfidentialVote", vote: v.id })}>${t("delete")}</button>
       </div>
-      <p class="note" data-confidential-limit>${t("confidentialLimit", { total: totals.total, limite: v.limite })}</p>
+      <p class="note" data-confidential-limit>${t("confidentialLimit", { total, limite: v.limite })}</p>
       <form class="row" data-submit="addConfidentialOption" ${attrs({ vote: v.id })}>
         <input name="nom" class="grow" maxlength="255" placeholder="${t("optionPlaceholder")}" required>
         <button class="b" type="submit">${t("addOption")}</button>
@@ -301,7 +299,7 @@ function renderConfidentialVotes() {
   document.getElementById("confidential").innerHTML = `
     <h2>${t("newConfidentialVote")}</h2>
     <form class="row" data-submit="addConfidentialVote">
-      <input name="numero" value="${next}" class="num" aria-label="${t("number")}">
+      <input name="numero" value="${nextNumber(S.votes, S.votesConfidentiels)}" class="num" maxlength="50" aria-label="${t("number")}">
       <input name="objet" placeholder="${t("confidentialVotePlaceholder")}" class="grow" maxlength="5000" required>
       <button class="b primary lg">${t("add")}</button>
     </form>
@@ -316,8 +314,8 @@ function renderElus() {
     if (editingMember === e.id) {
       return `<tr><td colspan="4">
         <form class="row member-edit" data-submit="saveElu" ${attrs({ id: e.id })}>
-          <label>${t("colName")}<input name="nom" value="${esc(e.nom)}" required></label>
-          <label class="grow">${t("colRole")}<input name="fonction" value="${esc(e.fonction)}"></label>
+          <label>${t("colName")}<input name="nom" value="${esc(e.nom)}" maxlength="255" required></label>
+          <label class="grow">${t("colRole")}<input name="fonction" value="${esc(e.fonction)}" maxlength="500"></label>
           <button class="b primary" type="submit">${t("validate")}</button>
           <button class="b" type="button" ${attrs({ act: "cancelEditElu" })}>${t("cancel")}</button>
         </form>
@@ -341,8 +339,8 @@ function renderElus() {
   document.getElementById("elus").innerHTML = `
     <h2>${t("addMember")}</h2>
     <form class="row" data-submit="addElu">
-      <input name="nom" placeholder="${t("namePlaceholder")}" required>
-      <input name="fonction" placeholder="${t("rolePlaceholder")}" class="grow">
+      <input name="nom" placeholder="${t("namePlaceholder")}" maxlength="255" required>
+      <input name="fonction" placeholder="${t("rolePlaceholder")}" class="grow" maxlength="500">
       <button class="b primary lg">${t("add")}</button>
     </form>
     <h2>${t("members", { n: S.elus.filter(member => member.actif).length })}</h2>

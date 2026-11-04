@@ -3,40 +3,51 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const { sessionSchema } = require("../server/schemas");
 
-function createStateContext() {
+function createStateContext(overrides = {}) {
   let nextId = 0;
   const context = vm.createContext({
-    DEFAULT_ELUS: [],
+    DEFAULT_ELUS: [["Élu", "Maire"], ["Autre", "Conseiller"]],
     uid: () => `generated${++nextId}`,
     today: () => "2026-11-01",
+    structuredClone,
+    ...overrides,
   });
-  const source = fs.readFileSync(path.join(__dirname, "../js/state.js"), "utf8");
-  vm.runInContext(source, context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../js/state.js"), "utf8"), context);
   return context;
 }
 
-test("normalizing a resumed archive retains every deliberation and repairs legacy ids", () => {
+test("creates a new session that the server accepts", () => {
+  const session = createStateContext().fresh();
+  const result = sessionSchema.safeParse(JSON.parse(JSON.stringify(session)));
+  assert.equal(result.success, true);
+  assert.equal(Object.values(session.presence).every(attendance => attendance.present), true);
+});
+
+test("marks resigned members absent when a new session keeps the member list", () => {
   const context = createStateContext();
-  const archive = {
-    snapshot: {
-      elus: [{ id: "m1", nom: "Élu", fonction: "Maire", actif: true }],
-      seance: { id: "s1", titre: "Conseil municipal", date: "2026-11-01", president: "m1" },
-      presence: { m1: { present: true, mandataire: null } },
-      votes: [
-        { id: "v1", numero: "1", objet: "Délibération 1" },
-        { id: "legacy-vote-2", numero: "2", objet: "Délibération 2" },
-        { id: "v1", numero: "3", objet: "Délibération 3" },
-      ],
-    },
-  };
+  const session = context.fresh([{ id: "m1", nom: "Élu", fonction: "", actif: false }]);
+  assert.deepEqual({ ...session.presence.m1 }, { present: false, mandataire: null });
+});
 
-  const [restored] = context.normalizeArchives([archive]);
+test("resuming an archive edits a copy and keeps every deliberation", () => {
+  const snapshot = { seance: { id: "s1" }, votes: [{ id: "v1" }, { id: "v2" }] };
+  let committed = 0;
+  const context = createStateContext({
+    confirm: () => true,
+    t: key => key,
+    navigateToTab: () => {},
+    openVote: "v1",
+    archives: [{ id: "s1", snapshot }],
+    countCommit: () => { committed++; },
+  });
+  vm.runInContext("ARCHIVES = archives; commit = countCommit;", context);
 
-  assert.equal(restored.snapshot.votes.length, 3);
-  assert.deepEqual(
-    Array.from(restored.snapshot.votes, vote => vote.objet),
-    ["Délibération 1", "Délibération 2", "Délibération 3"],
-  );
-  assert.equal(new Set(Array.from(restored.snapshot.votes, vote => vote.id)).size, 3);
+  context.restoreArchive("s1");
+  const restored = vm.runInContext("S", context);
+  assert.equal(restored.votes.length, 2);
+  assert.equal(committed, 1);
+  restored.votes.pop();
+  assert.equal(snapshot.votes.length, 2);
 });

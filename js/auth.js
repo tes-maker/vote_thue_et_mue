@@ -1,4 +1,5 @@
-/* ---------- authentification par compte serveur ---------- */
+/* ---------- connexion, déconnexion et verrouillage après inactivité ---------- */
+/** Déconnexion côté navigateur ; la session serveur, elle, expire après 8 h sans requête. */
 const IDLE_TIMEOUT = 15 * 60 * 1000;
 let idleTimer;
 
@@ -23,18 +24,18 @@ async function login(form) {
     err.textContent = "";
     setLocked(false);
   } catch (error) {
-    err.textContent = error instanceof ApiError && error.status === 401
-      ? t("loginBad")
-      : error.message === t("loginDataError") ? error.message : t("loginServerUnavailable");
+    err.textContent = error instanceof ApiError && error.status === 401 ? t("loginBad") : t("loginServerUnavailable");
   }
 }
 
+/** Au chargement de la page, reprend la session serveur si elle est encore ouverte. */
 async function restoreLogin() {
   if (!await API.currentUser()) return;
   await loadServerState();
   setLocked(false);
 }
 
+/** Attend la fin des enregistrements pour pouvoir signaler une perte de données. */
 async function logout() {
   const saved = await saveQueue;
   let logoutFailed = false;

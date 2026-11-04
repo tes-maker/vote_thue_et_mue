@@ -1,9 +1,15 @@
+/**
+ * Crée un compte de connexion : npm run admin:create -- adresse@exemple.fr
+ * Le mot de passe est saisi au terminal, pour ne figurer ni dans l'historique du
+ * shell ni dans la liste des processus. bcrypt limite sa longueur à 72 octets.
+ */
 require("dotenv").config({ path: process.env.APP_ENV_FILE || ".env" });
 
 const readline = require("node:readline");
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
 
+/** Lit une saisie au terminal sans l'afficher ; Ctrl+C annule. */
 function readHidden(prompt) {
   if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
     throw new Error("L'outil de création du compte doit être lancé dans un terminal interactif.");
@@ -12,33 +18,25 @@ function readHidden(prompt) {
   return new Promise((resolve, reject) => {
     const input = process.stdin;
     let value = "";
-    process.stdout.write(prompt);
-    input.setRawMode(true);
-    input.resume();
-
+    const finish = settle => {
+      input.off("data", onData);
+      input.setRawMode(false);
+      input.pause();
+      process.stdout.write("\n");
+      settle();
+    };
     const onData = chunk => {
       for (const char of chunk.toString("utf8")) {
-        if (char === "\u0003") {
-          input.off("data", onData);
-          input.setRawMode(false);
-          input.pause();
-          process.stdout.write("\n");
-          reject(new Error("Opération annulée."));
-          return;
-        }
-        if (char === "\r" || char === "\n") {
-          input.off("data", onData);
-          input.setRawMode(false);
-          input.pause();
-          process.stdout.write("\n");
-          resolve(value);
-          return;
-        }
+        if (char === "\u0003") return finish(() => reject(new Error("Opération annulée.")));
+        if (char === "\r" || char === "\n") return finish(() => resolve(value));
         if (char === "\u007f") value = value.slice(0, -1);
         else value += char;
       }
     };
 
+    process.stdout.write(prompt);
+    input.setRawMode(true);
+    input.resume();
     input.on("data", onData);
   });
 }
