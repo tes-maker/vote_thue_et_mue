@@ -99,7 +99,7 @@ function sanitize() {
 function commit({ render: shouldRender = true } = {}) {
   sanitize();
   if (shouldRender) render();
-  const snapshot = JSON.parse(JSON.stringify(S));
+  const snapshot = structuredClone(S);
   saveQueue = saveQueue.then(async () => {
     if (saveError) return false;
     try {
@@ -141,10 +141,19 @@ async function archiveCurrentSession() {
   }
 }
 
+/** Vrai si un vote de la séance en cours manque à son archive. */
+function hasUnarchivedVotes() {
+  const archived = ARCHIVES.find(item => item.id === S.seance.id)?.snapshot;
+  const ids = new Set([...(archived?.votes ?? []), ...(archived?.votesConfidentiels ?? [])].map(v => v.id));
+  return [...S.votes, ...S.votesConfidentiels].some(v => !ids.has(v.id));
+}
+
 /** Reprend une archive comme séance en cours, pour la corriger puis l'archiver à nouveau. */
-function restoreArchive(id) {
+async function restoreArchive(id) {
   const entry = ARCHIVES.find(item => item.id === id);
   if (!entry || !confirm(t("historyRestoreConfirm"))) return;
+  // Des votes de la séance en cours absents de son archive seraient supprimés : même règle que le serveur.
+  if (hasUnarchivedVotes() && !await requireElevation()) return;
   S = structuredClone(entry.snapshot);
   openVote = null;
   navigateToTab("votes");

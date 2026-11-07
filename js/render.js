@@ -166,7 +166,10 @@ function renderHistory() {
       <div class="row spread">
         <div><h2>${esc(snapshot.seance.titre || t("defaultSession"))} — ${esc(fmtDate(snapshot.seance.date))}</h2>
         <p class="note">${t("historyArchivedAt", { date: new Date(archivedAt).toLocaleString(lang === "fr" ? "fr-FR" : "en-GB") })}</p></div>
-        <button class="b" ${attrs({ act: "restoreArchive", id })}>${t("historyRestore")}</button>
+        <div class="row">
+          <button class="b" ${attrs({ act: "restoreArchive", id })}>${t("historyRestore")}</button>
+          <button class="link" ${attrs({ act: "deleteArchive", id })}>${t("historyDelete")}</button>
+        </div>
       </div>
       ${votes}
       ${confidentialVotes}
@@ -234,6 +237,14 @@ const confidentialCount = (v, target, id) => target === "option"
   ? v.options.find(option => option.id === id)?.voix
   : v[target];
 
+/** Compte à rebours des bulletins : part du nombre d'élus autorisés et diminue à chaque suffrage saisi. */
+function renderRemainingBallots(v) {
+  const remaining = v.limite - confidentialTotal(v);
+  return `<div class="confidential-remaining${remaining === 0 ? " done" : ""}" data-confidential-remaining aria-live="polite">
+    <b>${remaining}</b><span>${t(remaining === 0 ? "confidentialRemainingNone" : "confidentialRemaining")}</span>
+  </div>`;
+}
+
 /** Met à jour les compteurs sans redessiner l'onglet, ce qui garde le focus sur le bouton cliqué. */
 function refreshConfidentialVote(vote) {
   const card = [...document.querySelectorAll("[data-confidential-vote]")]
@@ -242,6 +253,11 @@ function refreshConfidentialVote(vote) {
 
   const total = confidentialTotal(vote);
   card.querySelector("[data-confidential-limit]").textContent = t("confidentialLimit", { total, limite: vote.limite });
+  const remaining = vote.limite - total;
+  const countdown = card.querySelector("[data-confidential-remaining]");
+  countdown.classList.toggle("done", remaining === 0);
+  countdown.querySelector("b").textContent = String(remaining);
+  countdown.querySelector("span").textContent = t(remaining === 0 ? "confidentialRemainingNone" : "confidentialRemaining");
   for (const element of card.querySelectorAll("[data-confidential-count]")) {
     const { confidentialTarget, confidentialId } = element.dataset;
     const count = confidentialCount(vote, confidentialTarget, confidentialId);
@@ -284,6 +300,7 @@ function renderConfidentialVotes() {
         ${renderVoteTitle(v, "confidential")}
         <button class="link" ${attrs({ act: "delConfidentialVote", vote: v.id })}>${t("delete")}</button>
       </div>
+      ${renderRemainingBallots(v)}
       <p class="note" data-confidential-limit>${t("confidentialLimit", { total, limite: v.limite })}</p>
       <form class="row" data-submit="addConfidentialOption" ${attrs({ vote: v.id })}>
         <input name="nom" class="grow" maxlength="255" placeholder="${t("optionPlaceholder")}" required>

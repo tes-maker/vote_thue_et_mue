@@ -20,6 +20,8 @@ const { Pool } = require("pg");
 const { z } = require("zod");
 const {
   archiveSchema,
+  elevateSchema,
+  idSchema,
   loginSchema,
   mandateInputSchema,
   sessionSchema,
@@ -42,7 +44,10 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT i
 
 const SESSION_COOKIE_NAME = isProduction ? "__Host-vote-cm" : "vote-cm.sid";
 const SESSION_COOKIE = { httpOnly: true, secure: isProduction, sameSite: "strict", path: "/" };
-const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+/** Expiration après 10 minutes sans requête ; le client la prolonge tant que l'utilisateur agit (js/auth.js). */
+const SESSION_MAX_AGE_MS = 10 * 60 * 1000;
+/** Durée pendant laquelle une confirmation du mot de passe autorise les suppressions. */
+const ELEVATION_MS = 5 * 60 * 1000;
 
 /** Comparé lorsque le compte n'existe pas, pour que la réponse prenne le même temps. */
 const UNKNOWN_USER_HASH = "$2a$12$C6UzMDM.H6dfI/f/IKcEe.8G0kz3fg5hQbQ6Hb0EkmBHv6GZG2fCW";
@@ -57,7 +62,8 @@ const PUBLIC_FILES = new Set([
   "logo_thue_et_mue_dark.svg", "rf_logo.svg", "rf_logo_dark.svg",
 ]);
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Sans délai d'attente, une base injoignable ferait patienter les requêtes indéfiniment.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000 });
 pool.on("error", error => console.error("Erreur de connexion PostgreSQL :", error));
 const PgSessionStore = connectPgSimple(session);
 
@@ -128,21 +134,94 @@ function requireRevision(req, _res, next) {
 /** Protections de toute route d'écriture du registre. */
 const guardedWrite = [requireAuth, requireCsrf, requireRevision];
 
+/**
+ * Authentification renforcée : le mot de passe a été confirmé il y a moins de
+ * ELEVATION_MS. Le jeton bearer n'en bénéficie jamais, faute de mot de passe à confirmer.
+ */
+const isElevated = req => !req.apiAuthenticated && req.session?.elevatedUntil > Date.now();
+
+function requireElevation(req, _res, next) {
+  if (!isElevated(req)) throw new HttpError(403, "reauth_required");
+  next();
+}
+
+/* ---------- suppressions de votes ----------
+   Un vote enregistré (nominal ou confidentiel) ne peut disparaître de la base,
+   séance active et archives comprises, qu'avec une authentification renforcée.
+   Les écritures de la séance complète sont donc comparées à ce qui est en base. */
+
+const voteIds = snapshot => new Set(
+  [...(snapshot?.votes ?? []), ...(snapshot?.votesConfidentiels ?? [])].map(vote => vote.id),
+);
+const losesVotes = (before, after) => [...before].some(id => !after.has(id));
+
+/** Une archive par séance ; pour un identifiant répété, la dernière occurrence l'emporte. */
+const uniqueArchives = archives => [...new Map(archives.map(archive => [archive.id, archive])).values()];
+
+async function archivedSnapshots(client, sessionIds) {
+  const { rows } = await client.query(
+    "SELECT session_id, snapshot FROM session_archives WHERE session_id = ANY($1::text[])",
+    [sessionIds],
+  );
+  return new Map(rows.map(row => [row.session_id, row.snapshot]));
+}
+
+/**
+ * Vérifie, avant de remplacer la séance active par `next`, la révision attendue
+ * et qu'aucun vote ne se perd sans authentification renforcée :
+ * - même séance : tout vote enregistré doit rester ;
+ * - autre séance : les votes de l'ancienne doivent figurer dans son archive, et la
+ *   nouvelle, si elle est archivée, doit reprendre tous les votes de son archive
+ *   (sinon un nouvel archivage les effacerait).
+ * La ligne reste verrouillée jusqu'au COMMIT.
+ */
+async function checkActiveReplacement(client, req, next) {
+  const { rows: [row] } = await client.query("SELECT payload, revision FROM app_state WHERE id = 1 FOR UPDATE");
+  if (Number(row?.revision ?? 0) !== req.expectedRevision) throw new HttpError(409, "state_conflict");
+  if (!row || isElevated(req)) return;
+
+  const previous = row.payload;
+  const nextIds = voteIds(next);
+  if (previous.seance.id === next.seance.id) {
+    if (losesVotes(voteIds(previous), nextIds)) throw new HttpError(403, "reauth_required");
+    return;
+  }
+  const archives = await archivedSnapshots(client, [previous.seance.id, next.seance.id]);
+  if (losesVotes(voteIds(previous), voteIds(archives.get(previous.seance.id)))
+    || losesVotes(voteIds(archives.get(next.seance.id)), nextIds)) {
+    throw new HttpError(403, "reauth_required");
+  }
+}
+
+/** Remplacer une archive existante ne doit pas non plus en retirer de votes. */
+async function checkArchiveReplacements(client, req, archives) {
+  if (archives.length === 0 || isElevated(req)) return;
+  const existing = await archivedSnapshots(client, archives.map(archive => archive.id));
+  if (archives.some(archive => losesVotes(voteIds(existing.get(archive.id)), voteIds(archive.snapshot)))) {
+    throw new HttpError(403, "reauth_required");
+  }
+}
+
 /* ---------- accès à la base ---------- */
 
-/** Exécute callback dans une transaction, annulée si une erreur est levée. */
+/**
+ * Exécute callback dans une transaction, annulée si une erreur est levée.
+ * Si l'annulation échoue elle-même, la connexion est détruite plutôt que rendue
+ * au pool, et l'erreur d'origine reste celle qui est signalée.
+ */
 async function transaction(callback) {
   const client = await pool.connect();
+  let broken;
   try {
     await client.query("BEGIN");
     const value = await callback(client);
     await client.query("COMMIT");
     return value;
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(rollbackError => { broken = rollbackError; });
     throw error;
   } finally {
-    client.release();
+    client.release(broken);
   }
 }
 
@@ -176,15 +255,23 @@ async function saveActiveState(client, active, userId, revision, action = "state
   return Number(result.rows[0].revision);
 }
 
-/** Une séance n'a qu'une archive : archiver à nouveau remplace la précédente. */
-function saveArchive(client, { id, archivedAt, snapshot }, userId) {
+/**
+ * Enregistre des archives en une seule requête. Une séance n'a qu'une archive :
+ * archiver à nouveau remplace la précédente, et pour un identifiant présent
+ * plusieurs fois dans la liste, la dernière occurrence l'emporte (PostgreSQL
+ * refuse qu'une même requête modifie deux fois la même ligne).
+ */
+function saveArchives(client, archives, userId) {
+  const unique = uniqueArchives(archives);
+  if (unique.length === 0) return;
   return client.query(
     `INSERT INTO session_archives (session_id, archived_at, snapshot, archived_by)
-     VALUES ($1, $2, $3::jsonb, $4)
+     SELECT a->>'id', (a->>'archivedAt')::timestamptz, a->'snapshot', $2
+     FROM jsonb_array_elements($1::jsonb) AS a
      ON CONFLICT (session_id) DO UPDATE
      SET archived_at = EXCLUDED.archived_at, snapshot = EXCLUDED.snapshot,
          archived_by = EXCLUDED.archived_by`,
-    [id, archivedAt, JSON.stringify(snapshot), userId],
+    [JSON.stringify(unique), userId],
   );
 }
 
@@ -226,8 +313,11 @@ function createApp() {
     },
   }));
   app.use(express.json({ limit: "10mb", type: "application/json" }));
+  // Erreurs de lecture du corps (JSON mal formé, trop volumineux, encodage inconnu…) :
+  // ce sont des erreurs du client, pas des pannes du serveur.
   app.use((error, _req, _res, next) => {
-    next(error.type === "entity.parse.failed" ? new HttpError(400, "invalid_data") : error);
+    if (!error.type || !(error.status >= 400 && error.status < 500)) return next(error);
+    next(error.status === 413 ? new HttpError(413, "payload_too_large") : new HttpError(400, "invalid_data"));
   });
   app.use(session({
     name: SESSION_COOKIE_NAME,
@@ -239,12 +329,14 @@ function createApp() {
     cookie: { ...SESSION_COOKIE, maxAge: SESSION_MAX_AGE_MS },
   }));
 
-  const loginLimiter = rateLimit({
+  const passwordLimiter = () => rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
     standardHeaders: "draft-8",
     legacyHeaders: false,
   });
+  const loginLimiter = passwordLimiter();
+  const elevateLimiter = passwordLimiter();
 
   /* ----- santé et authentification ----- */
 
@@ -254,12 +346,12 @@ function createApp() {
   });
 
   app.post("/api/auth/login", loginLimiter, async (req, res) => {
-    const { email, password } = parse(loginSchema, req.body);
+    const { email, password } = parse(loginSchema, req.body); // adresse déjà normalisée
     // bcrypt ignore ce qui dépasse 72 octets, or zod compte ici des caractères.
     if (Buffer.byteLength(password, "utf8") > 72) throw new HttpError(400, "invalid_credentials");
     const result = await pool.query(
       "SELECT id, email, password_hash FROM app_users WHERE email = $1",
-      [email.trim().toLowerCase()],
+      [email],
     );
     const user = result.rows[0];
     const valid = await bcrypt.compare(password, user?.password_hash ?? UNKNOWN_USER_HASH);
@@ -277,6 +369,17 @@ function createApp() {
   app.get("/api/auth/me", (req, res) => {
     if (!req.session.userId) return res.json({ user: null });
     res.json({ user: { email: req.session.userEmail }, csrfToken: req.session.csrfToken });
+  });
+
+  /** Authentification renforcée : le mot de passe est redemandé avant une suppression. */
+  app.post("/api/auth/elevate", requireSession, requireCsrf, elevateLimiter, async (req, res) => {
+    const { password } = parse(elevateSchema, req.body);
+    if (Buffer.byteLength(password, "utf8") > 72) throw new HttpError(401, "invalid_credentials");
+    const { rows: [user] } = await pool.query("SELECT password_hash FROM app_users WHERE id = $1", [req.authUserId]);
+    if (!user || !await bcrypt.compare(password, user.password_hash)) throw new HttpError(401, "invalid_credentials");
+    req.session.elevatedUntil = Date.now() + ELEVATION_MS;
+    await sessionCall(req, "save");
+    res.json({ expiresInSeconds: ELEVATION_MS / 1000 });
   });
 
   app.post("/api/auth/logout", requireSession, requireCsrf, async (req, res) => {
@@ -357,10 +460,22 @@ function createApp() {
 
   app.put(versioned("/state"), guardedWrite, async (req, res) => {
     const active = parse(sessionSchema, req.body?.active);
-    const revision = await transaction(client => (
-      saveActiveState(client, active, req.authUserId, req.expectedRevision)
-    ));
+    const revision = await transaction(async client => {
+      await checkActiveReplacement(client, req, active);
+      return saveActiveState(client, active, req.authUserId, req.expectedRevision);
+    });
     res.json({ revision });
+  });
+
+  /** Supprime une séance archivée : requiert l'authentification renforcée. */
+  app.delete(versioned("/archives/:id"), requireAuth, requireCsrf, requireElevation, async (req, res) => {
+    const id = parse(idSchema, req.params.id);
+    await transaction(async client => {
+      const { rowCount } = await client.query("DELETE FROM session_archives WHERE session_id = $1", [id]);
+      if (rowCount === 0) throw new HttpError(404, "not_found");
+      await audit(client, req.authUserId, "archive.deleted");
+    });
+    res.status(204).end();
   });
 
   app.post(versioned("/archive"), guardedWrite, async (req, res) => {
@@ -370,7 +485,7 @@ function createApp() {
       if (Number(row?.revision) !== req.expectedRevision) throw new HttpError(409, "state_conflict");
       const snapshot = parse(sessionSchema, row.payload);
       const archive = { id: snapshot.seance.id, archivedAt: new Date().toISOString(), snapshot };
-      await saveArchive(client, archive, req.authUserId);
+      await saveArchives(client, [archive], req.authUserId);
       const nextRevision = req.expectedRevision + 1;
       await client.query(
         "UPDATE app_state SET revision = $1, updated_at = NOW(), updated_by = $2 WHERE id = 1",
@@ -386,8 +501,10 @@ function createApp() {
     const active = parse(sessionSchema, req.body?.active);
     const history = parse(z.array(archiveSchema).max(5000), req.body?.history);
     const revision = await transaction(async client => {
+      await checkActiveReplacement(client, req, active);
+      await checkArchiveReplacements(client, req, uniqueArchives(history));
       const next = await saveActiveState(client, active, req.authUserId, req.expectedRevision, "state.imported");
-      for (const archive of history) await saveArchive(client, archive, req.authUserId);
+      await saveArchives(client, history, req.authUserId);
       return next;
     });
     res.json({ revision });
@@ -414,25 +531,39 @@ function createApp() {
   return app;
 }
 
+/** Délai laissé aux requêtes en cours à l'arrêt, avant de couper malgré tout. */
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+
 /** Applique le schéma (idempotent), puis démarre le serveur jusqu'à SIGTERM ou SIGINT. */
 async function main() {
   await pool.query(await fs.readFile(path.join(ROOT, "server/schema.sql"), "utf8"));
   const server = createApp().listen(PORT, HOST, () => {
     console.log(`Application disponible sur http://${HOST}:${PORT}`);
   });
-  const shutdown = () => server.close(async () => {
-    await pool.end();
-    process.exit(0);
+  server.on("error", error => {
+    console.error("Erreur du serveur HTTP :", error);
+    process.exit(1);
   });
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS).unref();
+    server.close(async () => {
+      await pool.end();
+      process.exit(0);
+    });
+  };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 
 if (require.main === module) {
-  main().catch(error => {
+  main().catch(async error => {
     console.error("Démarrage impossible :", error);
     process.exitCode = 1;
+    await pool.end().catch(() => {});
   });
 }
 
-module.exports = { createApp, isValidApiToken };
+module.exports = { checkActiveReplacement, checkArchiveReplacements, createApp, isValidApiToken };

@@ -25,7 +25,13 @@ Toutes ces routes sont préfixées par `/api`. Celles qui ne commencent pas par 
 - Avec une session, les requêtes mutantes doivent fournir le jeton CSRF reçu dans la réponse de connexion ou de `/api/auth/me`, dans l'en-tête `X-CSRF-Token`.
 - Les intégrations serveur-à-serveur peuvent utiliser `Authorization: Bearer <jeton>` si `API_BEARER_TOKEN` est défini sur le serveur. Configurez un jeton aléatoire d'au moins 32 caractères, par exemple avec `openssl rand -hex 32`. Ce jeton donne le même accès en lecture et écriture que le compte administrateur ; ne l'intégrez jamais dans le code JavaScript d'un site public. Les requêtes bearer n'ont pas besoin de session ni de jeton CSRF.
 - Les routes qui modifient l'état demandent également la révision actuelle dans l'en-tête `If-Match` : la dernière valeur renvoyée par l'API. Si quelqu'un a écrit entre-temps, la requête échoue en `409` sans rien modifier ; il faut alors relire les données avant de réessayer. La séance et le mandat ont chacun leur propre révision.
-- Le client web envoie les cookies en same-origin. Une session serveur expire après huit heures sans requête. Le navigateur, lui, déconnecte l'utilisateur après quinze minutes d'inactivité.
+- Le client web envoie les cookies en same-origin. Une session serveur expire après dix minutes sans requête, ce qui couvre aussi un onglet fermé sans déconnexion. Le navigateur déconnecte l'utilisateur après dix minutes d'inactivité ; tant qu'il agit, il prolonge la session au plus une fois par minute avec `GET /api/auth/me`.
+- **Authentification renforcée.** Toute suppression demande de confirmer à nouveau le mot de passe avec `POST /api/auth/elevate`, ce qui l'autorise pendant cinq minutes pour la session. Sont concernées la suppression d'une séance archivée et toute écriture qui ferait disparaître de la base un vote enregistré, nominal ou confidentiel :
+  - `PUT /state` ou `/state/import` sur la même séance, qui retire un vote ;
+  - un changement de séance alors qu'un vote de l'ancienne séance manque à son archive ;
+  - une séance active ou une archive importée qui reprend une séance archivée avec moins de votes que son archive.
+
+  Sans confirmation, la requête échoue en `403 reauth_required` sans rien modifier. Le jeton bearer ne permet jamais ces suppressions.
 - L'API est destinée à une intégration côté serveur et n'active pas CORS pour les navigateurs tiers.
 
 Exemple de lecture depuis le serveur d'un site tiers :
@@ -91,6 +97,24 @@ Réponse `200` si non connecté :
 ```json
 { "user": null }
 ```
+
+### `POST /api/auth/elevate`
+
+Confirme le mot de passe de l'utilisateur connecté avant une suppression. Requiert une session valide et `X-CSRF-Token` ; limité à 10 tentatives par 15 minutes.
+
+Corps :
+
+```json
+{ "password": "mot de passe" }
+```
+
+Réponse `200` :
+
+```json
+{ "expiresInSeconds": 300 }
+```
+
+Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `401 invalid_credentials`, `403 csrf_invalid`, `429` (trop de tentatives).
 
 ### `POST /api/auth/logout`
 
@@ -216,7 +240,7 @@ Réponse `200` :
 { "revision": 13 }
 ```
 
-Erreurs possibles : `400 invalid_data`, `400 invalid_revision` si la révision est trop grande, `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque ou n'est pas un entier positif.
+Erreurs possibles : `400 invalid_data`, `400 invalid_revision` si la révision est trop grande, `401 unauthorized`, `403 csrf_invalid`, `403 reauth_required` si un vote disparaîtrait, `409 state_conflict` si `If-Match` est périmé, `428 revision_required` si la révision manque ou n'est pas un entier positif.
 
 ### `POST /api/archive` et `POST /api/v1/archive`
 
@@ -237,6 +261,14 @@ Réponse `200` :
 
 Une archive ayant le même identifiant de séance est remplacée. Erreurs possibles : `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict`, `428 revision_required`.
 
+### `DELETE /api/archives/:id` et `DELETE /api/v1/archives/:id`
+
+Supprime définitivement la séance archivée `id` et tous ses votes. Requiert une session avec `X-CSRF-Token` et l'authentification renforcée. La séance active n'est pas modifiée.
+
+Réponse : `204 No Content`.
+
+Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `403 reauth_required`, `404 not_found`.
+
 ### `PUT /api/state/import` et `PUT /api/v1/state/import`
 
 Importe un état actif et une liste d'archives, par exemple depuis une autre instance. L'interface web ne l'utilise pas. Requiert `If-Match` et soit une session avec `X-CSRF-Token`, soit le jeton bearer.
@@ -253,7 +285,7 @@ Corps :
   },
   "history": [
     {
-      "id": "seance-archivee",
+      "id": "seancearchivee",
       "archivedAt": "2026-10-01T12:00:00.000Z",
       "snapshot": {}
     }
@@ -261,7 +293,7 @@ Corps :
 }
 ```
 
-Le format de `active` est le même que pour `PUT /api/state`. Chaque archive contient son identifiant, sa date ISO d'archivage et un instantané de séance valide.
+Le format de `active` est le même que pour `PUT /api/state`. Chaque archive contient son identifiant, sa date ISO d'archivage (en `Z` ou avec un décalage comme `+00:00`, tel que le renvoie `GET /api/state`) et un instantané de séance valide. Si un identifiant figure plusieurs fois dans `history`, la dernière occurrence l'emporte.
 
 Réponse `200` :
 
@@ -269,7 +301,7 @@ Réponse `200` :
 { "revision": 15 }
 ```
 
-Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `409 state_conflict`, `428 revision_required`.
+Erreurs possibles : `400 invalid_data`, `401 unauthorized`, `403 csrf_invalid`, `403 reauth_required`, `409 state_conflict`, `428 revision_required`.
 
 ## Format commun des erreurs
 
@@ -279,7 +311,7 @@ Les erreurs de l'API sont renvoyées sous la forme :
 { "error": "code_erreur" }
 ```
 
-Les codes particuliers et leurs statuts sont indiqués avec chaque route. Une erreur interne inattendue renvoie `500 server_error`. Un corps qui n'est pas du JSON valide renvoie `400 invalid_data`, sur toutes les routes et avant même le contrôle d'authentification.
+Les codes particuliers et leurs statuts sont indiqués avec chaque route. Une erreur interne inattendue renvoie `500 server_error`. Un corps qui n'est pas du JSON valide renvoie `400 invalid_data`, sur toutes les routes et avant même le contrôle d'authentification. Un corps de plus de 10 Mo renvoie `413 payload_too_large`, dans les mêmes conditions.
 
 ## Routes inconnues
 

@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { archiveSchema, mandateInputSchema, mandateSchema, sessionSchema } = require("../server/schemas");
+const { archiveSchema, loginSchema, mandateInputSchema, mandateSchema, sessionSchema } = require("../server/schemas");
 
 function session() {
   const members = [
@@ -165,6 +165,20 @@ test("validates archive identifiers and snapshot shape", () => {
     archivedAt: "2026-11-01T12:00:00.000Z",
     snapshot,
   }).success, false);
+});
+
+test("accepts archive dates with an offset, as returned by GET /state", () => {
+  const snapshot = session();
+  assert.equal(archiveSchema.safeParse({
+    id: snapshot.seance.id,
+    archivedAt: "2026-11-01T12:00:00.123456+00:00",
+    snapshot,
+  }).success, true);
+});
+
+test("normalizes the login email before validating it", () => {
+  assert.equal(loginSchema.parse({ email: "  Maire@Exemple.FR ", password: "x" }).email, "maire@exemple.fr");
+  assert.equal(loginSchema.safeParse({ email: "pas-une-adresse", password: "x" }).success, false);
 });
 
 test("validates current mandate years for creation and editing", () => {

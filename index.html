@@ -96,6 +96,20 @@
   </form>
 </dialog>
 
+<dialog id="reauth-dialog" aria-labelledby="reauth-dialog-title">
+  <form class="mandate-form" data-submit="reauth">
+    <h2 id="reauth-dialog-title" data-i18n="reauthTitle">Confirmez votre identité</h2>
+    <p class="note" data-i18n="reauthDescription">La suppression d'une séance ou d'un vote demande de saisir à nouveau votre mot de passe.</p>
+    <label for="reauth-password" data-i18n="loginPassword">Mot de passe</label>
+    <input type="password" id="reauth-password" name="password" autocomplete="current-password" maxlength="72" required>
+    <p id="reauth-error" class="login-error" role="alert"></p>
+    <div class="row mandate-actions">
+      <button class="b primary" type="submit" data-i18n="reauthConfirm">Confirmer</button>
+      <button class="b" type="button" data-act="closeReauthDialog" data-i18n="cancel">Annuler</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="notification" class="notification" role="status" aria-live="polite"></div>
 
 <footer class="footer">

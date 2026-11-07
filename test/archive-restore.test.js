@@ -31,7 +31,7 @@ test("marks resigned members absent when a new session keeps the member list", (
   assert.deepEqual({ ...session.presence.m1 }, { present: false, mandataire: null });
 });
 
-test("resuming an archive edits a copy and keeps every deliberation", () => {
+test("resuming an archive edits a copy and keeps every deliberation", async () => {
   const snapshot = { seance: { id: "s1" }, votes: [{ id: "v1" }, { id: "v2" }] };
   let committed = 0;
   const context = createStateContext({
@@ -40,14 +40,42 @@ test("resuming an archive edits a copy and keeps every deliberation", () => {
     navigateToTab: () => {},
     openVote: "v1",
     archives: [{ id: "s1", snapshot }],
+    current: { seance: { id: "s0" }, votes: [], votesConfidentiels: [] },
     countCommit: () => { committed++; },
   });
-  vm.runInContext("ARCHIVES = archives; commit = countCommit;", context);
+  vm.runInContext("ARCHIVES = archives; S = current; commit = countCommit;", context);
 
-  context.restoreArchive("s1");
+  await context.restoreArchive("s1");
   const restored = vm.runInContext("S", context);
   assert.equal(restored.votes.length, 2);
   assert.equal(committed, 1);
   restored.votes.pop();
   assert.equal(snapshot.votes.length, 2);
+});
+
+test("resuming an archive over unarchived votes requires the password again", async () => {
+  const current = { seance: { id: "s0" }, votes: [{ id: "v9" }], votesConfidentiels: [] };
+  let asked = 0;
+  let committed = 0;
+  const context = createStateContext({
+    confirm: () => true,
+    t: key => key,
+    navigateToTab: () => {},
+    requireElevation: async () => { asked++; return false; },
+    archives: [{ id: "s1", snapshot: { seance: { id: "s1" }, votes: [], votesConfidentiels: [] } }],
+    current,
+    countCommit: () => { committed++; },
+  });
+  vm.runInContext("ARCHIVES = archives; S = current; commit = countCommit;", context);
+
+  await context.restoreArchive("s1");
+  assert.equal(asked, 1);
+  assert.equal(committed, 0);
+  assert.equal(vm.runInContext("S", context), current);
+
+  // Une fois la séance en cours archivée avec ce vote, aucune confirmation n'est demandée.
+  vm.runInContext("ARCHIVES.push({ id: 's0', snapshot: structuredClone(S) });", context);
+  await context.restoreArchive("s1");
+  assert.equal(asked, 1);
+  assert.equal(committed, 1);
 });

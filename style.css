@@ -227,15 +227,25 @@ body.locked .login { display: flex; flex: 1; align-items: center; justify-conten
 .notification.show { opacity: 1; transform: translateY(0); }
 .notification.error { border-left-color: var(--erreur); }
 
-dialog#mandate-dialog {
+dialog#mandate-dialog, dialog#reauth-dialog {
   width: min(560px, calc(100vw - 32px)); max-width: none; padding: 24px;
   border: 1px solid var(--bordure); border-bottom: 4px solid var(--bleu-france);
   background: var(--fond-surface); color: var(--texte);
 }
-dialog#mandate-dialog::backdrop { background: rgba(0, 0, 18, .5); }
+dialog#mandate-dialog::backdrop, dialog#reauth-dialog::backdrop { background: rgba(0, 0, 18, .5); }
 .mandate-form h2 { margin: 0 0 8px; }
 .mandate-form .note { margin: 0 0 20px; }
 .mandate-actions { margin-top: 24px; }
+#reauth-dialog input { display: block; width: 100%; margin: 4px 0 8px; }
+
+/* Compte à rebours des bulletins d'un vote confidentiel */
+.confidential-remaining {
+  display: inline-flex; align-items: baseline; gap: 8px; margin: 8px 0 4px; padding: 8px 14px;
+  border-left: 4px solid var(--bleu-france); background: var(--fond-surface);
+}
+.confidential-remaining b { font-size: 32px; font-weight: 700; line-height: 1.1; color: var(--bleu-france); }
+.confidential-remaining.done { border-left-color: var(--succes); }
+.confidential-remaining.done b { color: var(--succes); }
 
 :root[data-theme="dark"] button.member-status.active { background: #173b25; }
 :root[data-theme="dark"] .badge.ok { background: #173b25; }

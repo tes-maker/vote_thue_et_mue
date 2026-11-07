@@ -225,7 +225,7 @@ Quelques repères pour modifier le code :
 
 ## Sécurité et limites
 
-- Le site doit être utilisé en HTTPS. La connexion utilise un cookie de session `HttpOnly`, `Secure` en production et `SameSite=Strict`. Le navigateur déconnecte après 15 minutes d'inactivité ; la session serveur expire après 8 heures sans requête.
+- Le site doit être utilisé en HTTPS. La connexion utilise un cookie de session `HttpOnly`, `Secure` en production et `SameSite=Strict`. Après 10 minutes d'inactivité, le navigateur déconnecte l'utilisateur ; la session serveur expire elle aussi après 10 minutes sans requête, même si l'onglet a été fermé.
 - Les mots de passe sont stockés sous forme de hash bcrypt ; les tentatives de connexion sont limitées à 10 par période de 15 minutes.
 - Le jeton `API_BEARER_TOKEN` donne un accès complet au registre : protégez-le comme un secret administrateur et ne l'exposez jamais au navigateur.
 - Les comptes se créent depuis le serveur avec `npm run admin:create`. Il n'existe pas d'écran de gestion des comptes, et tous les comptes ont les mêmes droits.

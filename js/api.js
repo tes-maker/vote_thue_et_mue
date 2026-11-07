@@ -45,6 +45,8 @@ const API = {
   },
   login: (email, password) => apiRequest("/api/auth/login", { method: "POST", body: { email, password } }),
   logout: () => apiRequest("/api/auth/logout", { method: "POST" }),
+  elevate: password => apiRequest("/api/auth/elevate", { method: "POST", body: { password } }),
+  deleteArchive: id => apiRequest(`/api/archives/${encodeURIComponent(id)}`, { method: "DELETE" }),
   getState: () => apiRequest("/api/state"),
   saveState: (active, revision) => apiRequest("/api/state", { method: "PUT", body: { active }, revision }),
   archive: revision => apiRequest("/api/archive", { method: "POST", body: {}, revision }),

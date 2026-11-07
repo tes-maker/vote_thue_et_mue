@@ -4,6 +4,18 @@ const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
 
+/** Élément factice du compte à rebours des bulletins restants. */
+function countdownElement() {
+  const element = {
+    done: false,
+    count: { textContent: "" },
+    label: { textContent: "" },
+    classList: { toggle: (_name, on) => { element.done = on; } },
+    querySelector: selector => (selector === "b" ? element.count : element.label),
+  };
+  return element;
+}
+
 test("renders named anonymous options with abstention and non-participation counters", () => {
   const section = { innerHTML: "" };
   const context = {
@@ -39,6 +51,7 @@ test("renders named anonymous options with abstention and non-participation coun
   context.renderConfidentialVotes();
 
   assert.match(section.innerHTML, /Option A/);
+  assert.match(section.innerHTML, /class="confidential-remaining done"[^>]*>\s*<b>0<\/b><span>confidentialRemainingNone<\/span>/);
   assert.match(section.innerHTML, /<button type="button" class="member-action"[^>]*data-act="confidentialCount"[^>]*data-delta="1"/);
   assert.match(section.innerHTML, /<td class="confidential-count"[^>]*>1<\/td>/);
   assert.match(section.innerHTML, /disabled aria-label="Ajouter Option A"/);
@@ -59,15 +72,16 @@ test("refreshes only the changed confidential ballot counters", () => {
     { dataset: { target: "npp", id: "", delta: "1" }, disabled: false },
   ];
   const limit = { textContent: "" };
+  const remaining = countdownElement();
   const card = {
     dataset: { confidentialVote: "secret1" },
-    querySelector: () => limit,
+    querySelector: selector => selector === "[data-confidential-remaining]" ? remaining : limit,
     querySelectorAll: selector => selector === "[data-confidential-count]" ? countCells : buttons,
   };
   const context = {
     window: { location: { pathname: "/" }, addEventListener() {} },
     document: { querySelectorAll: () => [card] },
-    t: (key, params) => `${params.total}/${params.limite}`,
+    t: (key, params) => (params ? `${params.total}/${params.limite}` : key),
   };
   vm.runInNewContext(
     fs.readFileSync(path.join(__dirname, "../js/render.js"), "utf8"),
@@ -84,6 +98,8 @@ test("refreshes only the changed confidential ballot counters", () => {
 
   assert.deepEqual(countCells.map(cell => cell.textContent), ["1", "1", "0"]);
   assert.equal(limit.textContent, "2/2");
+  assert.equal(remaining.count.textContent, "0");
+  assert.equal(remaining.done, true);
   assert.deepEqual(buttons.map(button => button.disabled), [true, true, true]);
 });
 
@@ -93,13 +109,14 @@ test("increments a confidential counter without rerendering or submitting the pa
     textContent: "0",
   };
   const limit = { textContent: "" };
+  const remaining = countdownElement();
   const button = {
     dataset: { target: "option", id: "option1", delta: "1" },
     disabled: false,
   };
   const card = {
     dataset: { confidentialVote: "secret1" },
-    querySelector: () => limit,
+    querySelector: selector => selector === "[data-confidential-remaining]" ? remaining : limit,
     querySelectorAll: selector => selector === "[data-confidential-count]" ? [countCell] : [button],
   };
   const status = {
@@ -167,6 +184,8 @@ test("increments a confidential counter without rerendering or submitting the pa
   assert.equal(vote.options[0].voix, 1);
   assert.equal(countCell.textContent, "1");
   assert.equal(limit.textContent, "1/2");
+  assert.equal(remaining.count.textContent, "1");
+  assert.equal(remaining.done, false);
   assert.equal(commitOptions.render, false);
   assert.equal(renderCount, 0);
 });

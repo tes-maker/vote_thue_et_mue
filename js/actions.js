@@ -60,6 +60,14 @@ const ON_CLICK = {
     render();
   },
   restoreArchive: d => restoreArchive(d.id),
+  deleteArchive: async d => {
+    if (!confirm(t("confirmDeleteArchive")) || !await requireElevation()) return;
+    await API.deleteArchive(d.id);
+    ARCHIVES = ARCHIVES.filter(item => item.id !== d.id);
+    showNotification(t("archiveDeleted"));
+    render();
+  },
+  closeReauthDialog: () => document.getElementById("reauth-dialog").close(),
 
   present: d => { pres(d.id).present = d.val === "1"; commit(); },
   allPresent: d => { S.elus.filter(e => e.actif).forEach(e => { S.presence[e.id] = { present: d.val === "1", mandataire: null }; }); commit(); },
@@ -71,14 +79,17 @@ const ON_CLICK = {
   },
 
   toggleVote: d => { openVote = openVote === d.vote ? null : d.vote; render(); },
-  delVote: d => { if (confirm(t("confirmDelItem"))) { S.votes = S.votes.filter(v => v.id !== d.vote); commit(); } },
+  delVote: async d => {
+    if (!confirm(t("confirmDelItem")) || !await requireElevation()) return;
+    S.votes = S.votes.filter(v => v.id !== d.vote);
+    commit();
+  },
   choice: d => { findVote(d.vote).choix[d.id] = d.val; commit(); },
   setAll: d => { const v = findVote(d.vote); v.electeurs.forEach(e => { v.choix[e.id] = d.val; }); commit(); },
-  delConfidentialVote: d => {
-    if (confirm(t("confirmDelItem"))) {
-      S.votesConfidentiels = S.votesConfidentiels.filter(v => v.id !== d.vote);
-      commit();
-    }
+  delConfidentialVote: async d => {
+    if (!confirm(t("confirmDelItem")) || !await requireElevation()) return;
+    S.votesConfidentiels = S.votesConfidentiels.filter(v => v.id !== d.vote);
+    commit();
   },
   delConfidentialOption: d => {
     const vote = findConfidentialVote(d.vote);
@@ -138,6 +149,7 @@ const ON_CHANGE = {
 
 const ON_SUBMIT = {
   login: f => login(f),
+  reauth: f => confirmElevation(f),
   saveMandate: async f => {
     const mode = f.dataset.mode;
     if (mode === "create" && !confirm(t("confirmCreateMandate"))) return;
@@ -226,7 +238,10 @@ async function dispatchAction(action) {
     await action();
   } catch (error) {
     console.error("Action impossible :", error);
-    if (isConflict(error)) saveError = error;
+    if (isConflict(error)) {
+      saveError = error;
+      renderSaveStatus();
+    }
     showNotification(failureMessage(error), "error");
   }
 }
@@ -237,13 +252,13 @@ function blockedBySaveError() {
   return Boolean(saveError);
 }
 
-const ACTIONS_WITHOUT_WRITE = ["tab", "lang", "logout"];
+const ACTIONS_WITHOUT_WRITE = new Set(["tab", "lang", "themeToggle", "logout", "closeReauthDialog"]);
 
 document.addEventListener("click", ev => {
   const el = ev.target.closest("[data-act]");
   if (!el) return;
   ev.preventDefault();
-  if (!ACTIONS_WITHOUT_WRITE.includes(el.dataset.act) && blockedBySaveError()) return;
+  if (!ACTIONS_WITHOUT_WRITE.has(el.dataset.act) && blockedBySaveError()) return;
   dispatchAction(() => ON_CLICK[el.dataset.act]?.(el.dataset));
 });
 document.addEventListener("change", ev => {

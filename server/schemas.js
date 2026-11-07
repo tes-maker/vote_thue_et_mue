@@ -129,7 +129,8 @@ const sessionSchema = z.object({
 /** Séance archivée : son identifiant est toujours celui de la séance. */
 const archiveSchema = z.object({
   id: idSchema,
-  archivedAt: z.string().datetime(),
+  // Accepte aussi le décalage « +00:00 » renvoyé par GET /state, pour qu'un export se réimporte.
+  archivedAt: z.iso.datetime({ offset: true }),
   snapshot: sessionSchema,
 }).refine(archive => archive.id === archive.snapshot.seance.id, {
   message: "L'identifiant de l'archive ne correspond pas à la séance.",
@@ -148,12 +149,19 @@ const mandateInputSchema = mandateSchema.safeExtend({
 });
 
 const loginSchema = z.object({
-  email: z.string().email().max(255),
+  email: z.string().trim().toLowerCase().max(255).pipe(z.email()),
+  password: z.string().min(1).max(72),
+});
+
+/** Confirmation du mot de passe avant une suppression (authentification renforcée). */
+const elevateSchema = z.object({
   password: z.string().min(1).max(72),
 });
 
 module.exports = {
   archiveSchema,
+  elevateSchema,
+  idSchema,
   loginSchema,
   mandateInputSchema,
   mandateSchema,
